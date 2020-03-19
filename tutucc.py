@@ -56,6 +56,7 @@ class TokenType(Enum):
     ASSIGN        = '='
     EOF           = 'EOF'
     EXPRSTMT      = 'EXPRSTMT'
+    VAR           = 'VAR'
 
 
 class Token:
@@ -351,6 +352,18 @@ class ExprStmt(AST):
         self.token = Token(TokenType.EXPRSTMT, None)
         self.expr = expr
 
+class Var(AST):
+    def __init__(self, name, offset):
+        self.name = name
+        self.offset = offset
+        self.token = Token(TokenType.VAR, None)
+
+class Function(AST):
+    def __init__(self, nodes, locals, stack_size):
+        self.nodes = nodes
+        self.locals = locals
+        self.stack_size = stack_size
+
 class Parser:
     """
     program    = stmt*
@@ -368,6 +381,13 @@ class Parser:
         self.lexer = lexer
         # set current token to the first token taken from the input
         self.current_token = self.get_next_token()
+        self.locals = []
+
+    def find_var(self, token):
+        for var in self.locals:
+            if var.name == token.value:
+                return var
+        return None
 
     def get_next_token(self):
         return self.lexer.get_next_token()
@@ -393,12 +413,14 @@ class Parser:
             )
 
     def program(self):
+        self.locals = []
         stmts = []
 
         while self.current_token.type != TokenType.EOF:
             stmts.append(self.stmt())
 
-        return stmts
+        prog = Function(stmts, self.locals, 0)
+        return prog
 
     def stmt(self):
         token = self.current_token
@@ -493,6 +515,15 @@ class Parser:
             self.eat(TokenType.RPAREN)
             return node
 
+        if token.type == TokenType.ID:
+            self.eat(TokenType.ID)
+            var = self.find_var(token)
+            if var is None:
+                var = Var(token.value, 0)
+                self.locals.append(var)
+            return var
+
+
         self.current_token = self.get_next_token()
 
         return Num(token)
@@ -508,6 +539,28 @@ class Parser:
             return BinOp(left=zero, op=token, right=self.unary())
         return self.primary()
 
+    def gen_addr(self, node):
+        if node.token.type == TokenType.VAR:
+            print("  lea rax, [rbp-%d]" % node.offset)
+            print("  push rax")
+            return
+        
+        self.error(
+            error_code=ErrorCode.UNEXPECTED_TOKEN,
+            token=self.current_token,
+        )
+
+    def load(self):
+        print("  pop rax")
+        print("  mov rax, [rax]")
+        print("  push rax")
+
+    def store(self):
+        print("  pop rdi")
+        print("  pop rax")
+        print("  mov [rax], rdi")
+        print("  push rdi")
+
     def code_gen(self, node):
         if node.token.type == TokenType.INTEGER_CONST:
             print("  push %s" % node.value)
@@ -516,10 +569,19 @@ class Parser:
             self.code_gen(node.expr)
             print("  add rsp, 8")
             return
+        if node.token.type == TokenType.VAR:
+            self.gen_addr(node)
+            self.load()
+            return
+        if node.token.type == TokenType.ASSIGN:
+            self.gen_addr(node.left)
+            self.code_gen(node.right)
+            self.store()
+            return
         if node.token.type == TokenType.RETURN:
             self.code_gen(node.expr)
             print("  pop rax")
-            print("  ret")
+            print("  jmp .L.return")
             return
 
         self.code_gen(node.left)
@@ -587,12 +649,23 @@ def main():
     lexer = Lexer(text)
     try:
         parser = Parser(lexer)
-        nodes = parser.parse()
+        prog = parser.parse()
+        offset = 0
+        for v in prog.locals:
+            offset = offset + 8
+            v.offset = offset
+        prog.stack_size = offset
         print(".intel_syntax noprefix")
         print(".global main")
         print("main:")
-        for n in nodes:
+        print("  push rbp")
+        print("  mov rbp, rsp")
+        print("  sub rsp, %d" % prog.stack_size)
+        for n in prog.nodes:
             parser.code_gen(n)
+        print(".L.return:")
+        print("  mov rsp, rbp")
+        print("  pop rbp")
         print("  ret")
         sys.exit(0)
     except (LexerError, ParserError) as e:
