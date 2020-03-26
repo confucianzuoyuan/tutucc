@@ -65,6 +65,7 @@ class TokenType(Enum):
     WHILESTMT     = 'WHILESTMT'
     FORSTMT       = 'FORSTMT'
     BLOCK         = 'BLOCK'
+    FUNCALL       = 'FUNCALL'
 
 
 class Token:
@@ -398,6 +399,11 @@ class Block(AST):
         self.token = Token(TokenType.BLOCK, None)
         self.body = []
 
+class FunCall(AST):
+    def __init__(self):
+        self.token = Token(TokenType.FUNCALL, None)
+        self.funcname = None
+
 class Parser:
     """
     program    = stmt*
@@ -611,6 +617,16 @@ class Parser:
 
         if token.type == TokenType.ID:
             self.eat(TokenType.ID)
+
+            # 函数调用
+            if self.current_token.type == TokenType.LPAREN:
+                self.eat(TokenType.LPAREN)
+                self.eat(TokenType.RPAREN)
+                node = FunCall()
+                node.funcname = token.value
+                return node
+
+            # 查找变量
             var = self.find_var(token)
             if var is None:
                 var = Var(token.value, 0)
@@ -725,6 +741,10 @@ class Parser:
         if node.token.type == TokenType.BLOCK:
             for n in node.body:
                 self.code_gen(n)
+            return
+        if node.token.type == TokenType.FUNCALL:
+            print("  call %s" % node.funcname)
+            print("  push rax")
             return
         if node.token.type == TokenType.RETURN:
             self.code_gen(node.expr)
