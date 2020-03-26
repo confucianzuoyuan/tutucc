@@ -370,7 +370,8 @@ class Var(AST):
         self.token = Token(TokenType.VAR, None)
 
 class Function(AST):
-    def __init__(self, nodes, locals, stack_size):
+    def __init__(self, name, nodes, locals, stack_size):
+        self.name = name
         self.nodes = nodes
         self.locals = locals
         self.stack_size = stack_size
@@ -426,6 +427,7 @@ class Parser:
         self.current_token = self.get_next_token()
         self.locals = []
         self.labelseq = 1
+        self.funcname = None
 
     def find_var(self, token):
         for var in self.locals:
@@ -457,14 +459,31 @@ class Parser:
             )
 
     def program(self):
+        function_list = []
+        while self.current_token.type != TokenType.EOF:
+            function_list.append(self.function())
+        return function_list
+
+    def function(self):
+        name = None
         self.locals = []
+        if self.current_token.type == TokenType.ID:
+            name = self.current_token.value
+            self.eat(TokenType.ID)
+        self.eat(TokenType.LPAREN)
+        self.eat(TokenType.RPAREN)
+        self.eat(TokenType.LBRACE)
+
         stmts = []
 
-        while self.current_token.type != TokenType.EOF:
-            stmts.append(self.stmt())
-
-        prog = Function(stmts, self.locals, 0)
-        return prog
+        while True:
+            try:
+                self.eat(TokenType.RBRACE)
+                break
+            except:
+                stmts.append(self.stmt())
+        fn = Function(name, stmts, self.locals, 0)
+        return fn
 
     def stmt(self):
         token = self.current_token
@@ -785,7 +804,7 @@ class Parser:
         if node.token.type == TokenType.RETURN:
             self.code_gen(node.expr)
             print("  pop rax")
-            print("  jmp .L.return")
+            print("  jmp .L.return.%s" % self.funcname)
             return
 
         self.code_gen(node.left)
@@ -855,22 +874,27 @@ def main():
         parser = Parser(lexer)
         prog = parser.parse()
         offset = 0
-        for v in prog.locals:
-            offset = offset + 8
-            v.offset = offset
-        prog.stack_size = offset
+        for fn in prog:
+            offset = 0
+            for v in fn.locals:
+                offset += 8
+                v.offset = offset
+            fn.stack_size = offset
         print(".intel_syntax noprefix")
-        print(".global main")
-        print("main:")
-        print("  push rbp")
-        print("  mov rbp, rsp")
-        print("  sub rsp, %d" % prog.stack_size)
-        for n in prog.nodes:
-            parser.code_gen(n)
-        print(".L.return:")
-        print("  mov rsp, rbp")
-        print("  pop rbp")
-        print("  ret")
+        for fn in prog:
+            print(".global %s" % fn.name)
+            print("%s:" % fn.name)
+            parser.funcname = fn.name
+
+            print("  push rbp")
+            print("  mov rbp, rsp")
+            print("  sub rsp, %d" % fn.stack_size)
+            for n in fn.nodes:
+                parser.code_gen(n)
+            print(".L.return.%s:" % parser.funcname)
+            print("  mov rsp, rbp")
+            print("  pop rbp")
+            print("  ret")
         sys.exit(0)
     except (LexerError, ParserError) as e:
         print(e.message)
