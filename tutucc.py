@@ -364,17 +364,18 @@ class ExprStmt(AST):
         self.expr = expr
 
 class Var(AST):
-    def __init__(self, name, offset):
+    def __init__(self, name):
         self.name = name
-        self.offset = offset
+        self.offset = 0
         self.token = Token(TokenType.VAR, None)
 
 class Function(AST):
-    def __init__(self, name, nodes, locals, stack_size):
-        self.name = name
-        self.nodes = nodes
-        self.locals = locals
-        self.stack_size = stack_size
+    def __init__(self):
+        self.name = None
+        self.nodes = []
+        self.params = []
+        self.locals = []
+        self.stack_size = 0
 
 class IfStmt(AST):
     def __init__(self):
@@ -430,9 +431,9 @@ class Parser:
         self.funcname = None
 
     def find_var(self, token):
-        for var in self.locals:
-            if var.name == token.value:
-                return var
+        for v in self.locals:
+            if v.name == token.value:
+                return v
         return None
 
     def get_next_token(self):
@@ -465,13 +466,13 @@ class Parser:
         return function_list
 
     def function(self):
-        name = None
         self.locals = []
+        fn = Function()
         if self.current_token.type == TokenType.ID:
-            name = self.current_token.value
+            fn.name = self.current_token.value
             self.eat(TokenType.ID)
         self.eat(TokenType.LPAREN)
-        self.eat(TokenType.RPAREN)
+        fn.params = self.read_func_params()
         self.eat(TokenType.LBRACE)
 
         stmts = []
@@ -482,7 +483,8 @@ class Parser:
                 break
             except:
                 stmts.append(self.stmt())
-        fn = Function(name, stmts, self.locals, 0)
+        fn.nodes = stmts
+        fn.locals = self.locals
         return fn
 
     def stmt(self):
@@ -651,7 +653,7 @@ class Parser:
             # 查找变量
             var = self.find_var(token)
             if var is None:
-                var = Var(token.value, 0)
+                var = Var(token.value)
                 self.locals.append(var)
             return var
 
@@ -684,6 +686,35 @@ class Parser:
                 break
         self.eat(TokenType.RPAREN)
         return args_list
+
+    def read_func_params(self):
+        if self.current_token.type == TokenType.RPAREN:
+            self.eat(TokenType.RPAREN)
+            return []
+        
+        var_list = []
+        if self.current_token.type == TokenType.ID:
+            name = self.current_token.value
+            self.eat(TokenType.ID)
+            v = Var(name)
+            self.locals.append(v)
+            var_list.append(v)
+
+        while True:
+            try:
+                self.eat(TokenType.RPAREN)
+                break
+            except:
+                self.eat(TokenType.COMMA)
+                if self.current_token.type == TokenType.ID:
+                    name = self.current_token.value
+                    self.eat(TokenType.ID)
+                    v = Var(name=name)
+                    self.locals.append(v)
+                    var_list.append(v)
+        
+        return var_list
+
 
     def gen_addr(self, node):
         if node.token.type == TokenType.VAR:
@@ -873,7 +904,6 @@ def main():
     try:
         parser = Parser(lexer)
         prog = parser.parse()
-        offset = 0
         for fn in prog:
             offset = 0
             for v in fn.locals:
@@ -889,6 +919,10 @@ def main():
             print("  push rbp")
             print("  mov rbp, rsp")
             print("  sub rsp, %d" % fn.stack_size)
+
+            for i in range(len(fn.params)):
+                print("  mov [rbp-%d], %s" % (fn.params[i].offset, argreg[i]))
+
             for n in fn.nodes:
                 parser.code_gen(n)
             print(".L.return.%s:" % parser.funcname)
