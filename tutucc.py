@@ -50,6 +50,8 @@ class TokenType(Enum):
     INT           = 'INT'
     IF            = 'IF'
     ELSE          = 'ELSE'
+    WHILE         = 'WHILE'
+    FOR           = 'FOR'
     RETURN        = 'RETURN'
     # misc
     ID            = 'ID'
@@ -60,6 +62,8 @@ class TokenType(Enum):
     EXPRSTMT      = 'EXPRSTMT'
     VAR           = 'VAR'
     IFSTMT        = 'IFSTMT'
+    WHILESTMT     = 'WHILESTMT'
+    FORSTMT       = 'FORSTMT'
 
 
 class Token:
@@ -374,6 +378,20 @@ class IfStmt(AST):
         self.then = None
         self.els = None
 
+class WhileStmt(AST):
+    def __init__(self):
+        self.token = Token(TokenType.WHILESTMT, None)
+        self.cond = None
+        self.then = None
+
+class ForStmt(AST):
+    def __init__(self):
+        self.token = Token(TokenType.FORSTMT, None)
+        self.init = None
+        self.cond = None
+        self.then = None
+        self.inc  = None
+
 class Parser:
     """
     program    = stmt*
@@ -455,9 +473,39 @@ class Parser:
             node.els = self.stmt()
             return node
 
+        if token.type == TokenType.WHILE:
+            self.eat(TokenType.WHILE)
+            node = WhileStmt()
+            self.eat(TokenType.LPAREN)
+            node.cond = self.expr()
+            self.eat(TokenType.RPAREN)
+            node.then = self.stmt()
+            return node
+
+        if token.type == TokenType.FOR:
+            self.eat(TokenType.FOR)
+            node = ForStmt()
+            self.eat(TokenType.LPAREN)
+            try:
+                self.eat(TokenType.SEMI)
+            except:
+                node.init = ExprStmt(self.expr())
+                self.eat(TokenType.SEMI)
+            try:
+                self.eat(TokenType.SEMI)
+            except:
+                node.cond = self.expr()
+                self.eat(TokenType.SEMI)
+            try:
+                self.eat(TokenType.RPAREN)
+            except:
+                node.inc = ExprStmt(self.expr())
+                self.eat(TokenType.RPAREN)
+            node.then = self.stmt()
+            return node
+
         node = ExprStmt(self.expr())
-        if self.current_token.type == TokenType.SEMI:
-            self.eat(TokenType.SEMI)
+        self.eat(TokenType.SEMI)
         return node
 
     def expr(self):
@@ -623,6 +671,35 @@ class Parser:
                 print("  je  .L.end.%d" % seq)
                 self.code_gen(node.then)
                 print(".L.end.%d:" % seq)
+            return
+        if node.token.type == TokenType.WHILESTMT:
+            seq = self.labelseq
+            self.labelseq += 1
+            print(".L.begin.%d:" % seq)
+            self.code_gen(node.cond)
+            print("  pop rax")
+            print("  cmp rax, 0")
+            print("  je  .L.end.%d" % seq)
+            self.code_gen(node.then)
+            print("  jmp .L.begin.%d" % seq)
+            print(".L.end.%d:" % seq)
+            return
+        if node.token.type == TokenType.FORSTMT:
+            seq = self.labelseq
+            self.labelseq += 1
+            if node.init is not None:
+                self.code_gen(node.init)
+            print(".L.begin.%d:" % seq)
+            if node.cond is not None:
+                self.code_gen(node.cond)
+                print("  pop rax")
+                print("  cmp rax, 0")
+                print("  je  .L.end.%d" % seq)
+            self.code_gen(node.then)
+            if node.inc is not None:
+                self.code_gen(node.inc)
+            print("  jmp .L.begin.%d" % seq)
+            print(".L.end.%d:" % seq)
             return
         if node.token.type == TokenType.RETURN:
             self.code_gen(node.expr)
