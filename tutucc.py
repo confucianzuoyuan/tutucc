@@ -48,6 +48,8 @@ class TokenType(Enum):
     EQ            = '=='
     # block of reserved words
     INT           = 'INT'
+    IF            = 'IF'
+    ELSE          = 'ELSE'
     RETURN        = 'RETURN'
     # misc
     ID            = 'ID'
@@ -57,6 +59,7 @@ class TokenType(Enum):
     EOF           = 'EOF'
     EXPRSTMT      = 'EXPRSTMT'
     VAR           = 'VAR'
+    IFSTMT        = 'IFSTMT'
 
 
 class Token:
@@ -364,6 +367,13 @@ class Function(AST):
         self.locals = locals
         self.stack_size = stack_size
 
+class IfStmt(AST):
+    def __init__(self):
+        self.token = Token(TokenType.IFSTMT, None)
+        self.cond = None
+        self.then = None
+        self.els = None
+
 class Parser:
     """
     program    = stmt*
@@ -382,6 +392,7 @@ class Parser:
         # set current token to the first token taken from the input
         self.current_token = self.get_next_token()
         self.locals = []
+        self.labelseq = 1
 
     def find_var(self, token):
         for var in self.locals:
@@ -428,6 +439,20 @@ class Parser:
             self.eat(TokenType.RETURN)
             node = UnaryOp(op=token, expr=self.expr())
             self.eat(TokenType.SEMI)
+            return node
+
+        if token.type == TokenType.IF:
+            self.eat(TokenType.IF)
+            node = IfStmt()
+            if self.current_token.type == TokenType.LPAREN:
+                self.eat(TokenType.LPAREN)
+            node.cond = self.expr()
+            if self.current_token.type == TokenType.RPAREN:
+                self.eat(TokenType.RPAREN)
+            node.then = self.stmt()
+            if self.current_token.type == TokenType.ELSE:
+                self.eat(TokenType.ELSE)
+            node.els = self.stmt()
             return node
 
         node = ExprStmt(self.expr())
@@ -577,6 +602,27 @@ class Parser:
             self.gen_addr(node.left)
             self.code_gen(node.right)
             self.store()
+            return
+        if node.token.type == TokenType.IFSTMT:
+            seq = self.labelseq
+            self.labelseq += 1
+            if node.els is not None:
+                self.code_gen(node.cond)
+                print("  pop rax")
+                print("  cmp rax, 0")
+                print("  je  .L.else.%d" % seq)
+                self.code_gen(node.then)
+                print("  jmp .L.end.%d" % seq)
+                print(".L.else.%d:" % seq)
+                self.code_gen(node.els)
+                print(".L.end.%d:" % seq)
+            else:
+                self.code_gen(node.cond)
+                print("  pop rax")
+                print("  cmp rax, 0")
+                print("  je  .L.end.%d" % seq)
+                self.code_gen(node.then)
+                print(".L.end.%d:" % seq)
             return
         if node.token.type == TokenType.RETURN:
             self.code_gen(node.expr)
