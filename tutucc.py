@@ -764,7 +764,22 @@ class Parser:
                 self.code_gen(arg)
             for i in range(len(node.args)-1, -1, -1):
                 print("  pop %s" % argreg[i])
+            # 函数调用前，必须将 RSP 对齐到 16 字节的边界
+            # 这是 ABI 的要求
+            seq = self.labelseq
+            self.labelseq += 1
+            print("  mov rax, rsp")
+            print("  and rax, 15")
+            print("  jnz .L.call.%d" % seq)
+            print("  mov rax, 0")
             print("  call %s" % node.funcname)
+            print("  jmp .L.end.%d" % seq)
+            print(".L.call.%d:" % seq)
+            print("  sub rsp, 8")
+            print("  mov rax, 0")
+            print("  call %s" % node.funcname)
+            print("  add rsp, 8")
+            print(".L.end.%d:" % seq)
             print("  push rax")
             return
         if node.token.type == TokenType.RETURN:
