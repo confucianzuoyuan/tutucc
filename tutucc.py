@@ -7,14 +7,12 @@ class ErrorCode(Enum):
     ID_NOT_FOUND     = 'Identifier not found'
     DUPLICATE_ID     = 'Duplicate id found'
 
-
 class Error(Exception):
     def __init__(self, error_code=None, token=None, message=None):
         self.error_code = error_code
         self.token = token
         # add exception class name before the message
         self.message = f'{self.__class__.__name__}: {message}'
-
 
 class LexerError(Error):
     pass
@@ -36,6 +34,8 @@ class TokenType(Enum):
     DIV           = '/'
     LPAREN        = '('
     RPAREN        = ')'
+    LBRACE        = '{'
+    RBRACE        = '}'
     SEMI          = ';'
     DOT           = '.'
     COLON         = ':'
@@ -64,6 +64,7 @@ class TokenType(Enum):
     IFSTMT        = 'IFSTMT'
     WHILESTMT     = 'WHILESTMT'
     FORSTMT       = 'FORSTMT'
+    BLOCK         = 'BLOCK'
 
 
 class Token:
@@ -392,6 +393,11 @@ class ForStmt(AST):
         self.then = None
         self.inc  = None
 
+class Block(AST):
+    def __init__(self):
+        self.token = Token(TokenType.BLOCK, None)
+        self.body = []
+
 class Parser:
     """
     program    = stmt*
@@ -502,6 +508,21 @@ class Parser:
                 node.inc = ExprStmt(self.expr())
                 self.eat(TokenType.RPAREN)
             node.then = self.stmt()
+            return node
+
+        if token.type == TokenType.LBRACE:
+            self.eat(TokenType.LBRACE)
+            stmt_list = []
+
+            while True:
+                try:
+                    self.eat(TokenType.RBRACE)
+                    break
+                except:
+                    stmt_list.append(self.stmt())
+
+            node = Block()
+            node.body = stmt_list
             return node
 
         node = ExprStmt(self.expr())
@@ -700,6 +721,10 @@ class Parser:
                 self.code_gen(node.inc)
             print("  jmp .L.begin.%d" % seq)
             print(".L.end.%d:" % seq)
+            return
+        if node.token.type == TokenType.BLOCK:
+            for n in node.body:
+                self.code_gen(n)
             return
         if node.token.type == TokenType.RETURN:
             self.code_gen(node.expr)
