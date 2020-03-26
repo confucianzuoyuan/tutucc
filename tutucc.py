@@ -2,6 +2,8 @@ import argparse
 import sys
 from enum import Enum
 
+argreg = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+
 class ErrorCode(Enum):
     UNEXPECTED_TOKEN = 'Unexpected token'
     ID_NOT_FOUND     = 'Identifier not found'
@@ -403,6 +405,7 @@ class FunCall(AST):
     def __init__(self):
         self.token = Token(TokenType.FUNCALL, None)
         self.funcname = None
+        self.args     = []
 
 class Parser:
     """
@@ -621,9 +624,9 @@ class Parser:
             # 函数调用
             if self.current_token.type == TokenType.LPAREN:
                 self.eat(TokenType.LPAREN)
-                self.eat(TokenType.RPAREN)
                 node = FunCall()
                 node.funcname = token.value
+                node.args = self.func_args()
                 return node
 
             # 查找变量
@@ -648,6 +651,20 @@ class Parser:
             zero = Num(Token(type=TokenType.INTEGER_CONST, value=0))
             return BinOp(left=zero, op=token, right=self.unary())
         return self.primary()
+
+    def func_args(self):
+        if self.current_token.type == TokenType.RPAREN:
+            self.eat(TokenType.RPAREN)
+            return []
+        args_list = [self.assign()]
+        while True:
+            if self.current_token.type == TokenType.COMMA:
+                self.eat(TokenType.COMMA)
+                args_list.append(self.assign())
+            else:
+                break
+        self.eat(TokenType.RPAREN)
+        return args_list
 
     def gen_addr(self, node):
         if node.token.type == TokenType.VAR:
@@ -743,6 +760,10 @@ class Parser:
                 self.code_gen(n)
             return
         if node.token.type == TokenType.FUNCALL:
+            for arg in node.args:
+                self.code_gen(arg)
+            for i in range(len(node.args)-1, -1, -1):
+                print("  pop %s" % argreg[i])
             print("  call %s" % node.funcname)
             print("  push rax")
             return
