@@ -68,6 +68,8 @@ class TokenType(Enum):
     FORSTMT       = 'FORSTMT'
     BLOCK         = 'BLOCK'
     FUNCALL       = 'FUNCALL'
+    ADDR          = '&'
+    DEREF         = 'DEREF'
 
 
 class Token:
@@ -409,6 +411,16 @@ class FunCall(AST):
         self.funcname = None
         self.args     = []
 
+class Addr(AST):
+    def __init__(self):
+        self.token = Token(TokenType.ADDR, None)
+        self.expr = None
+
+class Deref(AST):
+    def __init__(self):
+        self.token = Token(TokenType.DEREF, None)
+        self.expr = None
+
 class Parser:
     """
     program    = stmt*
@@ -671,6 +683,16 @@ class Parser:
             self.eat(TokenType.MINUS)
             zero = Num(Token(type=TokenType.INTEGER_CONST, value=0))
             return BinOp(left=zero, op=token, right=self.unary())
+        if token.type == TokenType.ADDR:
+            self.eat(TokenType.ADDR)
+            node = Addr()
+            node.expr = self.unary()
+            return node
+        if token.type == TokenType.MUL:
+            self.eat(TokenType.MUL)
+            node = Deref()
+            node.expr = self.unary()
+            return node
         return self.primary()
 
     def func_args(self):
@@ -721,6 +743,9 @@ class Parser:
             print("  lea rax, [rbp-%d]" % node.offset)
             print("  push rax")
             return
+        if node.token.type == TokenType.DEREF:
+            self.code_gen(node.expr)
+            return
         
         self.error(
             error_code=ErrorCode.UNEXPECTED_TOKEN,
@@ -754,6 +779,13 @@ class Parser:
             self.gen_addr(node.left)
             self.code_gen(node.right)
             self.store()
+            return
+        if node.token.type == TokenType.ADDR:
+            self.gen_addr(node.expr)
+            return
+        if node.token.type == TokenType.DEREF:
+            self.code_gen(node.expr)
+            self.load()
             return
         if node.token.type == TokenType.IFSTMT:
             seq = self.labelseq
@@ -906,6 +938,8 @@ def main():
         prog = parser.parse()
         for fn in prog:
             offset = 0
+            # 局部变量是顺序进入数组的，所以需要逆序弹出算偏移量。
+            fn.locals.reverse()
             for v in fn.locals:
                 offset += 8
                 v.offset = offset
