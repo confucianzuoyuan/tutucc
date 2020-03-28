@@ -54,6 +54,7 @@ class TokenType(Enum):
     ELSE          = 'ELSE'
     WHILE         = 'WHILE'
     FOR           = 'FOR'
+    NULL          = 'NULL'
     RETURN        = 'RETURN'
     # misc
     ID            = 'ID'
@@ -375,8 +376,8 @@ class ExprStmt(AST):
         self.ty = None
 
 class Var(AST):
-    def __init__(self, name):
-        self.name = name
+    def __init__(self):
+        self.name = None
         self.offset = 0
         self.token = Token(TokenType.VAR, None)
         self.ty = None
@@ -460,6 +461,11 @@ class PtrDiff(AST):
         self.left = None
         self.right = None
 
+class NullAst(AST):
+    def __init__(self):
+        self.token = Token(TokenType.NULL, None)
+        self.ty = None
+
 class Type:
     def __init__(self):
         self.kind = None
@@ -468,6 +474,7 @@ class Type:
 class IntType(Type):
     def __init__(self):
         self.kind = TokenType.TYINT
+        self.base = None
 
 class Parser:
     """
@@ -528,6 +535,7 @@ class Parser:
     def function(self):
         self.locals = []
         fn = Function()
+        self.basetype()
         if self.current_token.type == TokenType.ID:
             fn.name = self.current_token.value
             self.eat(TokenType.ID)
@@ -546,6 +554,26 @@ class Parser:
         fn.nodes = stmts
         fn.locals = self.locals
         return fn
+
+    def declaration(self):
+        token = self.current_token
+        ty = self.basetype()
+        var = Var()
+        var.name = self.current_token.value
+        var.ty = ty
+        self.locals.append(var)
+        self.eat(TokenType.ID)
+
+        if self.current_token.type == TokenType.SEMI:
+            self.eat(TokenType.SEMI)
+            return NullAst()
+
+        self.eat(TokenType.ASSIGN)
+        left = var
+        right = self.expr()
+        self.eat(TokenType.SEMI)
+        node = Assign(left=left, op=Token(TokenType.ASSIGN, value='='), right=right)
+        return ExprStmt(expr=node)
 
     def stmt(self):
         node = self.stmt2()
@@ -619,6 +647,9 @@ class Parser:
             node = Block()
             node.body = stmt_list
             return node
+
+        if self.current_token.type == TokenType.INT:
+            return self.declaration()
 
         node = ExprStmt(self.expr())
         self.eat(TokenType.SEMI)
@@ -718,8 +749,7 @@ class Parser:
             # 查找变量
             var = self.find_var(token)
             if var is None:
-                var = Var(token.value)
-                self.locals.append(var)
+                raise Exception("没有找到变量")
             return var
 
 
@@ -762,18 +792,23 @@ class Parser:
         self.eat(TokenType.RPAREN)
         return args_list
 
+    def read_func_param(self):
+        var = Var()
+        ty = self.basetype()
+        var.name = self.current_token.value
+        var.ty = ty
+        self.eat(TokenType.ID)
+        return var
+
     def read_func_params(self):
         if self.current_token.type == TokenType.RPAREN:
             self.eat(TokenType.RPAREN)
             return []
         
         var_list = []
-        if self.current_token.type == TokenType.ID:
-            name = self.current_token.value
-            self.eat(TokenType.ID)
-            v = Var(name)
-            self.locals.append(v)
-            var_list.append(v)
+        v = self.read_func_param()
+        self.locals.append(v)
+        var_list.append(v)
 
         while True:
             try:
@@ -781,12 +816,9 @@ class Parser:
                 break
             except:
                 self.eat(TokenType.COMMA)
-                if self.current_token.type == TokenType.ID:
-                    name = self.current_token.value
-                    self.eat(TokenType.ID)
-                    v = Var(name=name)
-                    self.locals.append(v)
-                    var_list.append(v)
+                v = self.read_func_param()
+                self.locals.append(v)
+                var_list.append(v)
         
         return var_list
 
@@ -891,6 +923,18 @@ class Parser:
         ty.base = base
         return ty
 
+    def basetype(self):
+        self.eat(TokenType.INT)
+        ty = IntType()
+        while True:
+            try:
+                self.eat(TokenType.MUL)
+                ty = self.pointer_to(ty)
+            except:
+                break
+
+        return ty
+
     def gen_addr(self, node):
         if node.token.type == TokenType.VAR:
             print("  lea rax, [rbp-%d]" % node.offset)
@@ -917,6 +961,8 @@ class Parser:
         print("  push rdi")
 
     def code_gen(self, node):
+        if node.token.type == TokenType.NULL:
+            return
         if node.token.type == TokenType.INTEGER_CONST:
             print("  push %s" % node.value)
             return
