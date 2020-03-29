@@ -38,6 +38,8 @@ class TokenType(Enum):
     RPAREN        = ')'
     LBRACE        = '{'
     RBRACE        = '}'
+    LBRACKET      = '['
+    RBRACKET      = ']'
     SEMI          = ';'
     DOT           = '.'
     COLON         = ':'
@@ -76,6 +78,7 @@ class TokenType(Enum):
     PTRDIFF       = 'PTRDIFF'
     TYINT         = 'TYINT'
     TYPTR         = 'TYPTR'
+    TYARRAY       = 'TYARRAY'
 
 class Token:
     def __init__(self, type, value, lineno=None, column=None):
@@ -470,11 +473,14 @@ class Type:
     def __init__(self):
         self.kind = None
         self.base = None
+        self.size = 0
+        self.array_len = 0
 
 class IntType(Type):
     def __init__(self):
         self.kind = TokenType.TYINT
         self.base = None
+        self.size = 8
 
 class Parser:
     """
@@ -555,14 +561,17 @@ class Parser:
         fn.locals = self.locals
         return fn
 
+    # declaration = basetype ident ("[" num "]")* ("=" expr) ";"
     def declaration(self):
         token = self.current_token
         ty = self.basetype()
+        name = self.current_token.value
+        self.eat(TokenType.ID)
+        ty = self.read_type_suffix(ty)
         var = Var()
-        var.name = self.current_token.value
+        var.name = name
         var.ty = ty
         self.locals.append(var)
-        self.eat(TokenType.ID)
 
         if self.current_token.type == TokenType.SEMI:
             self.eat(TokenType.SEMI)
@@ -792,12 +801,23 @@ class Parser:
         self.eat(TokenType.RPAREN)
         return args_list
 
+    def read_type_suffix(self, base):
+        if self.current_token.type != TokenType.LBRACKET:
+            return base
+        self.eat(TokenType.LBRACKET)
+        sz = Num(self.current_token)
+        self.current_token = self.get_next_token()
+        self.eat(TokenType.RBRACKET)
+        return self.array_of(base, sz.value)
+
     def read_func_param(self):
-        var = Var()
         ty = self.basetype()
-        var.name = self.current_token.value
-        var.ty = ty
+        name = self.current_token.value
         self.eat(TokenType.ID)
+        ty = self.read_type_suffix(ty)
+        var = Var()
+        var.name = name
+        var.ty = ty
         return var
 
     def read_func_params(self):
@@ -905,11 +925,14 @@ class Parser:
             return
 
         if node.token.type == TokenType.ADDR:
-            node.ty = self.pointer_to(node.expr.ty)
+            if node.expr.ty.kind == TokenType.TYARRAY:
+                node.ty = self.pointer_to(node.expr.ty.base)
+            else:
+                node.ty = self.pointer_to(node.expr.ty)
             return
 
         if node.token.type == TokenType.DEREF:
-            if node.expr.ty.kind == TokenType.TYPTR:
+            if node.expr.ty.base is not None:
                 node.ty = node.expr.ty.base
             else:
                 node.ty = IntType()
@@ -920,7 +943,16 @@ class Parser:
     def pointer_to(self, base):
         ty = Type()
         ty.kind = TokenType.TYPTR
+        ty.size = 8
         ty.base = base
+        return ty
+
+    def array_of(self, base, len):
+        ty = Type()
+        ty.kind = TokenType.TYARRAY
+        ty.size = base.size * len
+        ty.base = base
+        ty.array_len = len
         return ty
 
     def basetype(self):
@@ -949,6 +981,11 @@ class Parser:
             token=self.current_token,
         )
 
+    def gen_lvar(self, node):
+        if node.ty.kind == TokenType.TYARRAY:
+            raise Exception(node.token + '不是左值')
+        self.gen_addr(node)
+
     def load(self):
         print("  pop rax")
         print("  mov rax, [rax]")
@@ -972,10 +1009,11 @@ class Parser:
             return
         if node.token.type == TokenType.VAR:
             self.gen_addr(node)
-            self.load()
+            if node.ty.kind != TokenType.TYARRAY:
+                self.load()
             return
         if node.token.type == TokenType.ASSIGN:
-            self.gen_addr(node.left)
+            self.gen_lvar(node.left)
             self.code_gen(node.right)
             self.store()
             return
@@ -984,7 +1022,8 @@ class Parser:
             return
         if node.token.type == TokenType.DEREF:
             self.code_gen(node.expr)
-            self.load()
+            if node.ty.kind != TokenType.TYARRAY:
+                self.load()
             return
         if node.token.type == TokenType.IFSTMT:
             seq = self.labelseq
@@ -1078,17 +1117,17 @@ class Parser:
         if node.op.type == TokenType.PLUS:
             print("  add rax, rdi")
         if node.op.type == TokenType.PTRADD:
-            print("  imul rdi, 8")
+            print("  imul rdi, %d" % node.ty.base.size)
             print("  add rax, rdi")
         if node.op.type == TokenType.MINUS:
             print("  sub rax, rdi")
         if node.op.type == TokenType.PTRSUB:
-            print("  imul rdi, 8")
+            print("  imul rdi, %d" % node.ty.base.size)
             print("  sub rax, rdi")
         if node.op.type == TokenType.PTRDIFF:
             print("  sub rax, rdi")
             print("  cqo")
-            print("  mov rdi, 8")
+            print("  mov rdi, %d" % node.left.ty.base.size)
             print("  idiv rdi")
         if node.op.type == TokenType.MUL:
             print("  imul rax, rdi")
@@ -1151,7 +1190,7 @@ def main():
             # 局部变量是顺序进入数组的，所以需要逆序弹出算偏移量。
             fn.locals.reverse()
             for v in fn.locals:
-                offset += 8
+                offset += v.ty.size
                 v.offset = offset
             fn.stack_size = offset
         print(".intel_syntax noprefix")
