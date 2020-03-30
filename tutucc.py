@@ -57,6 +57,7 @@ class TokenType(Enum):
     WHILE         = 'WHILE'
     FOR           = 'FOR'
     NULL          = 'NULL'
+    SIZEOF        = 'SIZEOF'
     RETURN        = 'RETURN'
     # misc
     ID            = 'ID'
@@ -750,6 +751,7 @@ class Parser:
             node.expr = exp
         return node
 
+    # primary = "(" expr ")" | "sizeof" unary | ident func-args? | num
     def primary(self):
         token = self.current_token
         if token.type == TokenType.LPAREN:
@@ -757,6 +759,12 @@ class Parser:
             node = self.expr()
             self.eat(TokenType.RPAREN)
             return node
+
+        if token.type == TokenType.SIZEOF:
+            self.eat(TokenType.SIZEOF)
+            node = self.unary()
+            self.add_type(node)
+            return Num(token=Token(type=TokenType.INTEGER_CONST, value=node.ty.size))
 
         if token.type == TokenType.ID:
             self.eat(TokenType.ID)
