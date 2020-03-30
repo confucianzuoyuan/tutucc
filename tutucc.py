@@ -808,6 +808,7 @@ class Parser:
         sz = Num(self.current_token)
         self.current_token = self.get_next_token()
         self.eat(TokenType.RBRACKET)
+        base = self.read_type_suffix(base)
         return self.array_of(base, sz.value)
 
     def read_func_param(self):
