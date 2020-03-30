@@ -736,6 +736,20 @@ class Parser:
 
         return node
 
+    # postfix = primary ("[" expr "]")*
+    def postfix(self):
+        node = self.primary()
+
+        while self.current_token.type == TokenType.LBRACKET:
+            # x[y] 是 *(x+y) 的语法糖
+            self.eat(TokenType.LBRACKET)
+            tok = self.current_token
+            exp = self.new_add(node, self.expr(), tok)
+            self.eat(TokenType.RBRACKET)
+            node = Deref()
+            node.expr = exp
+        return node
+
     def primary(self):
         token = self.current_token
         if token.type == TokenType.LPAREN:
@@ -766,6 +780,8 @@ class Parser:
 
         return Num(token)
 
+    # unary = ("+" | "-" | "*" | "&")? unary
+    #       | postfix
     def unary(self):
         token = self.current_token
         if token.type == TokenType.PLUS:
@@ -785,7 +801,7 @@ class Parser:
             node = Deref()
             node.expr = self.unary()
             return node
-        return self.primary()
+        return self.postfix()
 
     def func_args(self):
         if self.current_token.type == TokenType.RPAREN:
