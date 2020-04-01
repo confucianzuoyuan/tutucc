@@ -2,7 +2,8 @@ import argparse
 import sys
 from enum import Enum
 
-argreg = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+argreg1 = ["dil", "sil", "dl", "cl", "r8b", "r9b"]
+argreg8 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 
 class ErrorCode(Enum):
     UNEXPECTED_TOKEN = 'Unexpected token'
@@ -52,6 +53,7 @@ class TokenType(Enum):
     EQ            = '=='
     # block of reserved words
     INT           = 'INT'
+    CHAR          = 'CHAR'
     IF            = 'IF'
     ELSE          = 'ELSE'
     WHILE         = 'WHILE'
@@ -78,6 +80,7 @@ class TokenType(Enum):
     PTRSUB        = 'PTRSUB'
     PTRDIFF       = 'PTRDIFF'
     TYINT         = 'TYINT'
+    TYCHAR        = 'TYCHAR'
     TYPTR         = 'TYPTR'
     TYARRAY       = 'TYARRAY'
 
@@ -215,7 +218,7 @@ class Lexer:
         token = Token(type=None, value=None, lineno=self.lineno, column=self.column)
 
         value = ''
-        while self.current_char is not None and self.current_char.isalnum():
+        while self.current_char is not None and (self.current_char.isalnum() or self.current_char == '_'):
             value += self.current_char
             self.advance()
 
@@ -498,6 +501,12 @@ class IntType(Type):
         self.base = None
         self.size = 8
 
+class CharType(Type):
+    def __init__(self):
+        self.kind = TokenType.TYCHAR
+        self.base = None
+        self.size = 1
+
 class Parser:
     """
     program    = stmt*
@@ -722,7 +731,8 @@ class Parser:
             node.body = stmt_list
             return node
 
-        if self.current_token.type == TokenType.INT:
+        if self.current_token.type == TokenType.INT or \
+           self.current_token.type == TokenType.CHAR:
             return self.declaration()
 
         node = ExprStmt(self.expr())
@@ -1028,7 +1038,7 @@ class Parser:
                 node.ty = IntType()
 
     def is_integer(self, ty):
-        return ty.kind == TokenType.TYINT
+        return ty.kind == TokenType.TYINT or ty.kind == TokenType.TYCHAR
 
     def pointer_to(self, base):
         ty = Type()
@@ -1045,9 +1055,14 @@ class Parser:
         ty.array_len = len
         return ty
 
+    # basetype = ("char" | "int") "*"*
     def basetype(self):
-        self.eat(TokenType.INT)
-        ty = IntType()
+        if self.current_token.type == TokenType.CHAR:
+            self.eat(TokenType.CHAR)
+            ty = CharType()
+        else:
+            self.eat(TokenType.INT)
+            ty = IntType()
         while True:
             try:
                 self.eat(TokenType.MUL)
@@ -1079,16 +1094,30 @@ class Parser:
             raise Exception(node.token + '不是左值')
         self.gen_addr(node)
 
-    def load(self):
+    def load(self, ty):
         print("  pop rax")
-        print("  mov rax, [rax]")
+        if ty.size == 1:
+            print("  movsx rax, byte ptr [rax]")
+        else:
+            print("  mov rax, [rax]")
         print("  push rax")
 
-    def store(self):
+    def store(self, ty):
         print("  pop rdi")
         print("  pop rax")
-        print("  mov [rax], rdi")
+        if ty.size == 1:
+            print("  mov [rax], dil")
+        else:
+            print("  mov [rax], rdi")
         print("  push rdi")
+
+    def load_arg(self, var, idx):
+        sz = var.ty.size
+        if sz == 1:
+            print("  mov [rbp-%d], %s" % (var.offset, argreg1[idx]))
+        else:
+            assert sz == 8
+            print("  mov [rbp-%d], %s" % (var.offset, argreg8[idx]))
 
     def emit_data(self, prog):
         print(".data")
@@ -1096,6 +1125,9 @@ class Parser:
         for var in prog.globals:
             print("%s:" % var.name)
             print("  .zero %d" % var.ty.size)
+
+    def align_to(self, n, align):
+        return (n + align - 1) & ~(align - 1)
 
     def code_gen(self, node):
         if node.token.type == TokenType.NULL:
@@ -1110,12 +1142,12 @@ class Parser:
         if node.token.type == TokenType.VAR:
             self.gen_addr(node)
             if node.ty.kind != TokenType.TYARRAY:
-                self.load()
+                self.load(node.ty)
             return
         if node.token.type == TokenType.ASSIGN:
             self.gen_lvar(node.left)
             self.code_gen(node.right)
-            self.store()
+            self.store(node.ty)
             return
         if node.token.type == TokenType.ADDR:
             self.gen_addr(node.expr)
@@ -1123,7 +1155,7 @@ class Parser:
         if node.token.type == TokenType.DEREF:
             self.code_gen(node.expr)
             if node.ty.kind != TokenType.TYARRAY:
-                self.load()
+                self.load(node.ty)
             return
         if node.token.type == TokenType.IFSTMT:
             seq = self.labelseq
@@ -1183,7 +1215,7 @@ class Parser:
             for arg in node.args:
                 self.code_gen(arg)
             for i in range(len(node.args)-1, -1, -1):
-                print("  pop %s" % argreg[i])
+                print("  pop %s" % argreg8[i])
             # 函数调用前，必须将 RSP 对齐到 16 字节的边界
             # 这是 ABI 的要求
             seq = self.labelseq
@@ -1292,7 +1324,7 @@ def main():
             for v in fn.locals:
                 offset += v.ty.size
                 v.offset = offset
-            fn.stack_size = offset
+            fn.stack_size = parser.align_to(offset, 8)
         print(".intel_syntax noprefix")
         parser.emit_data(prog)
         print(".text")
@@ -1306,7 +1338,7 @@ def main():
             print("  sub rsp, %d" % fn.stack_size)
 
             for i in range(len(fn.params)):
-                print("  mov [rbp-%d], %s" % (fn.params[i].offset, argreg[i]))
+                parser.load_arg(fn.params[i], i)
 
             for n in fn.nodes:
                 parser.code_gen(n)
