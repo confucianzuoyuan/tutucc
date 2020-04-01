@@ -68,6 +68,7 @@ class TokenType(Enum):
     ASSIGN        = '='
     EOF           = 'EOF'
     EXPRSTMT      = 'EXPRSTMT'
+    STMTEXPR      = 'STMTEXPR'
     VAR           = 'VAR'
     IFSTMT        = 'IFSTMT'
     WHILESTMT     = 'WHILESTMT'
@@ -433,6 +434,12 @@ class ExprStmt(AST):
         self.expr = expr
         self.ty = None
 
+class StmtExpr(AST):
+    def __init__(self):
+        self.token = Token(TokenType.STMTEXPR, None)
+        self.body = []
+        self.ty = None
+
 class Var(AST):
     def __init__(self):
         self.name = None
@@ -638,6 +645,21 @@ class Parser:
         ty = self.read_type_suffix(ty)
         self.eat(TokenType.SEMI)
         self.new_gvar(name, ty)
+
+    # stmt-expr = "(" "{" stmt stmt* "}" ")"
+    # Statement expression is a GNU C extension.
+    def stmt_expr(self, tok):
+        node = StmtExpr()
+        node.body = [self.stmt()]
+        while True:
+            if self.current_token.type == TokenType.RBRACE:
+                self.eat(TokenType.RBRACE)
+                break
+            else:
+                node.body.append(self.stmt())
+        self.eat(TokenType.RPAREN)
+        node.body[-1] = node.body[-1].expr
+        return node
 
     # program = (global-var | function)*
     def program(self):
@@ -868,12 +890,19 @@ class Parser:
             node.expr = exp
         return node
 
-    # primary = "(" expr ")" | "sizeof" unary | ident func-args? | str | num
-    # args = "(" ident ("," ident)* ")"
+    # primary = "(" "{" stmt-expr-tail
+    #         | "(" expr ")"
+    #         | "sizeof" unary
+    #         | ident func-args?
+    #         | str
+    #         | num
     def primary(self):
         token = self.current_token
         if token.type == TokenType.LPAREN:
             self.eat(TokenType.LPAREN)
+            if self.current_token.type == TokenType.LBRACE:
+                self.eat(TokenType.LBRACE)
+                return self.stmt_expr(token)
             node = self.expr()
             self.eat(TokenType.RPAREN)
             return node
@@ -1094,6 +1123,11 @@ class Parser:
                 node.ty = node.expr.ty.base
             else:
                 node.ty = IntType()
+            return
+
+        if node.token.type == TokenType.STMTEXPR:
+            node.ty = node.body[-1].ty
+            return
 
     def is_integer(self, ty):
         return ty.kind == TokenType.TYINT or ty.kind == TokenType.TYCHAR
@@ -1269,7 +1303,7 @@ class Parser:
             print("  jmp .L.begin.%d" % seq)
             print(".L.end.%d:" % seq)
             return
-        if node.token.type == TokenType.BLOCK:
+        if node.token.type == TokenType.BLOCK or node.token.type == TokenType.STMTEXPR:
             for n in node.body:
                 self.code_gen(n)
             return
