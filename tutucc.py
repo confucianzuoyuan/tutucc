@@ -230,6 +230,15 @@ class Lexer:
 
         return token
 
+    def lexer(self):
+        tokens = []
+        while True:
+            tok = self.get_next_token()
+            tokens.append(tok)
+            if tok.type == TokenType.EOF:
+                break
+        return tokens
+
     def get_next_token(self):
         """Lexical analyzer (also known as scanner or tokenizer)
 
@@ -385,6 +394,7 @@ class Var(AST):
         self.offset = 0
         self.token = Token(TokenType.VAR, None)
         self.ty = None
+        self.is_local = None
 
 class Function(AST):
     def __init__(self):
@@ -470,6 +480,11 @@ class NullAst(AST):
         self.token = Token(TokenType.NULL, None)
         self.ty = None
 
+class Program(AST):
+    def __init__(self):
+        self.globals = []
+        self.fns = []
+
 class Type:
     def __init__(self):
         self.kind = None
@@ -496,22 +511,29 @@ class Parser:
     unary      = ("+" | "-")? primary
     primary    = num | ident | "(" expr ")"
     """
-    def __init__(self, lexer):
-        self.lexer = lexer
+    def __init__(self, tokens):
         # set current token to the first token taken from the input
-        self.current_token = self.get_next_token()
+        self.current_token_index = 0
         self.locals = []
+        self.globals = []
         self.labelseq = 1
         self.funcname = None
+        self.tokens = tokens
+        self.current_token = self.tokens[self.current_token_index]
 
     def find_var(self, token):
         for v in self.locals:
             if v.name == token.value:
                 return v
+        for v in self.globals:
+            if v.name == token.value:
+                return v
         return None
 
     def get_next_token(self):
-        return self.lexer.get_next_token()
+        self.current_token_index += 1
+        return self.tokens[self.current_token_index]
+        # return self.lexer.get_next_token()
 
     def error(self, error_code, token):
         raise ParserError(
@@ -533,11 +555,52 @@ class Parser:
                 token=self.current_token,
             )
 
+    def new_gvar(self, name, ty):
+        var = Var()
+        var.name = name
+        var.ty = ty
+        var.is_local = False
+        self.globals.append(var)
+        return var
+
+    def is_function(self):
+        idx = self.current_token_index
+        self.basetype()
+        if self.current_token.type != TokenType.ID:
+            return False
+        self.eat(TokenType.ID)
+        if self.current_token.type != TokenType.LPAREN:
+            self.current_token_index = idx
+            self.current_token = self.tokens[self.current_token_index]
+            return False
+        self.eat(TokenType.LPAREN)
+        self.current_token_index = idx
+        self.current_token = self.tokens[self.current_token_index]
+        return True
+
+    # global-var = basetype ident ("[" num "]")* ";"
+    def global_var(self):
+        ty = self.basetype()
+        name = self.current_token.value
+        self.eat(TokenType.ID)
+        ty = self.read_type_suffix(ty)
+        self.eat(TokenType.SEMI)
+        self.new_gvar(name, ty)
+
+    # program = (global-var | function)*
     def program(self):
         function_list = []
+        self.globals = []
         while self.current_token.type != TokenType.EOF:
-            function_list.append(self.function())
-        return function_list
+            if self.is_function():
+                function_list.append(self.function())
+            else:
+                self.global_var()
+
+        prog = Program()
+        prog.fns = function_list
+        prog.globals = self.globals
+        return prog
 
     def function(self):
         self.locals = []
@@ -572,6 +635,7 @@ class Parser:
         var = Var()
         var.name = name
         var.ty = ty
+        var.is_local = True
         self.locals.append(var)
 
         if self.current_token.type == TokenType.SEMI:
@@ -843,6 +907,7 @@ class Parser:
         var = Var()
         var.name = name
         var.ty = ty
+        var.is_local = True
         return var
 
     def read_func_params(self):
@@ -994,8 +1059,11 @@ class Parser:
 
     def gen_addr(self, node):
         if node.token.type == TokenType.VAR:
-            print("  lea rax, [rbp-%d]" % node.offset)
-            print("  push rax")
+            if node.is_local:
+                print("  lea rax, [rbp-%d]" % node.offset)
+                print("  push rax")
+            else:
+                print("  push offset %s" % node.name)
             return
         if node.token.type == TokenType.DEREF:
             self.code_gen(node.expr)
@@ -1021,6 +1089,13 @@ class Parser:
         print("  pop rax")
         print("  mov [rax], rdi")
         print("  push rdi")
+
+    def emit_data(self, prog):
+        print(".data")
+
+        for var in prog.globals:
+            print("%s:" % var.name)
+            print("  .zero %d" % var.ty.size)
 
     def code_gen(self, node):
         if node.token.type == TokenType.NULL:
@@ -1206,11 +1281,11 @@ def main():
 
     text = args.inputfile
 
-    lexer = Lexer(text)
+    tokens = Lexer(text).lexer()
     try:
-        parser = Parser(lexer)
+        parser = Parser(tokens)
         prog = parser.parse()
-        for fn in prog:
+        for fn in prog.fns:
             offset = 0
             # 局部变量是顺序进入数组的，所以需要逆序弹出算偏移量。
             fn.locals.reverse()
@@ -1219,7 +1294,9 @@ def main():
                 v.offset = offset
             fn.stack_size = offset
         print(".intel_syntax noprefix")
-        for fn in prog:
+        parser.emit_data(prog)
+        print(".text")
+        for fn in prog.fns:
             print(".global %s" % fn.name)
             print("%s:" % fn.name)
             parser.funcname = fn.name
