@@ -243,6 +243,41 @@ class Lexer:
                 break
         return tokens
 
+    def get_escape_char(self, c):
+        if c == 'a': return '\a'
+        if c == 'b': return '\b'
+        if c == 't': return '\t'
+        if c == 'n': return '\n'
+        if c == 'v': return '\v'
+        if c == 'f': return '\f'
+        if c == 'r': return '\r'
+        if c == 'e': return 27
+        if c == '0': return 0
+        return c
+
+    def read_string_literal(self):
+        value = ''
+        while self.current_char is not None:
+            if self.current_char == '\\':
+                self.advance()
+                try:
+                    value += self.get_escape_char(self.current_char)
+                except:
+                    value += chr(self.get_escape_char(self.current_char))
+            else:
+                value += self.current_char
+                self.advance()
+            if self.current_char == '"':
+                self.advance()
+                break
+        value += '\0'
+        tok = Token(
+            type=TokenType.STR,
+            value=value,
+            lineno=self.lineno,
+            column=self.column)
+        return tok
+
     def get_next_token(self):
         """Lexical analyzer (also known as scanner or tokenizer)
 
@@ -336,18 +371,7 @@ class Lexer:
 
             if self.current_char == '"':
                 self.advance()
-                value = ''
-                while self.current_char is not None and self.current_char != '"':
-                    value += self.current_char
-                    self.advance()
-
-                self.advance()
-                token = Token(
-                    type = TokenType.STR,
-                    value = value,
-                    lineno = self.lineno,
-                    column = self.column,
-                )
+                token = self.read_string_literal()
 
                 return token
 
@@ -880,8 +904,7 @@ class Parser:
         if token.type == TokenType.STR:
             self.current_token = self.get_next_token()
 
-            # c语言字符串末尾有'\0', 所以长度要加1
-            ty = self.array_of(CharType(), len(token.value) + 1)
+            ty = self.array_of(CharType(), len(token.value))
             var = self.new_gvar(self.new_label(), ty)
             var.contents = token.value
             return var
@@ -889,6 +912,8 @@ class Parser:
         self.current_token = self.get_next_token()
 
         return Num(token)
+
+
 
     def new_label(self):
         s = ".L.data.%d" % self.cnt
