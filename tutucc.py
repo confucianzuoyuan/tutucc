@@ -83,6 +83,7 @@ class TokenType(Enum):
     TYCHAR        = 'TYCHAR'
     TYPTR         = 'TYPTR'
     TYARRAY       = 'TYARRAY'
+    STR           = 'STR'
 
 class Token:
     def __init__(self, type, value, lineno=None, column=None):
@@ -333,6 +334,23 @@ class Lexer:
                 self.advance()
                 return token
 
+            if self.current_char == '"':
+                self.advance()
+                value = ''
+                while self.current_char is not None and self.current_char != '"':
+                    value += self.current_char
+                    self.advance()
+
+                self.advance()
+                token = Token(
+                    type = TokenType.STR,
+                    value = value,
+                    lineno = self.lineno,
+                    column = self.column,
+                )
+
+                return token
+
             # single-character token
             try:
                 # get enum member by value, e.g.
@@ -398,6 +416,7 @@ class Var(AST):
         self.token = Token(TokenType.VAR, None)
         self.ty = None
         self.is_local = None
+        self.contents = None
 
 class Function(AST):
     def __init__(self):
@@ -529,6 +548,7 @@ class Parser:
         self.funcname = None
         self.tokens = tokens
         self.current_token = self.tokens[self.current_token_index]
+        self.cnt = 0
 
     def find_var(self, token):
         for v in self.locals:
@@ -542,7 +562,6 @@ class Parser:
     def get_next_token(self):
         self.current_token_index += 1
         return self.tokens[self.current_token_index]
-        # return self.lexer.get_next_token()
 
     def error(self, error_code, token):
         raise ParserError(
@@ -825,7 +844,8 @@ class Parser:
             node.expr = exp
         return node
 
-    # primary = "(" expr ")" | "sizeof" unary | ident func-args? | num
+    # primary = "(" expr ")" | "sizeof" unary | ident func-args? | str | num
+    # args = "(" ident ("," ident)* ")"
     def primary(self):
         token = self.current_token
         if token.type == TokenType.LPAREN:
@@ -857,10 +877,23 @@ class Parser:
                 raise Exception("没有找到变量")
             return var
 
+        if token.type == TokenType.STR:
+            self.current_token = self.get_next_token()
+
+            # c语言字符串末尾有'\0', 所以长度要加1
+            ty = self.array_of(CharType(), len(token.value) + 1)
+            var = self.new_gvar(self.new_label(), ty)
+            var.contents = token.value
+            return var
 
         self.current_token = self.get_next_token()
 
         return Num(token)
+
+    def new_label(self):
+        s = ".L.data.%d" % self.cnt
+        self.cnt += 1
+        return s
 
     # unary = ("+" | "-" | "*" | "&")? unary
     #       | postfix
@@ -1124,7 +1157,11 @@ class Parser:
 
         for var in prog.globals:
             print("%s:" % var.name)
-            print("  .zero %d" % var.ty.size)
+            if not var.contents:
+                print("  .zero %d" % var.ty.size)
+                continue
+            for c in var.contents:
+                print("  .byte %d" % ord(c))
 
     def align_to(self, n, align):
         return (n + align - 1) & ~(align - 1)
