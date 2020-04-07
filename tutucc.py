@@ -590,6 +590,7 @@ class Parser:
         self.current_token_index = 0
         self.locals = []
         self.globals = []
+        self.scope = []
         self.labelseq = 1
         self.funcname = None
         self.tokens = tokens
@@ -597,10 +598,7 @@ class Parser:
         self.cnt = 0
 
     def find_var(self, token):
-        for v in self.locals:
-            if v.name == token.value:
-                return v
-        for v in self.globals:
+        for v in self.scope:
             if v.name == token.value:
                 return v
         return None
@@ -630,11 +628,23 @@ class Parser:
             )
 
     def new_gvar(self, name, ty):
+        var = self.new_var(name, ty, False)
+        self.globals.append(var)
+        return var
+
+    def new_var(self, name, ty, is_local):
         var = Var()
         var.name = name
         var.ty = ty
-        var.is_local = False
-        self.globals.append(var)
+        var.is_local = is_local
+
+        self.scope.append(var)
+        return var
+
+    def new_lvar(self, name, ty):
+        var = self.new_var(name, ty, True)
+        self.locals.append(var)
+
         return var
 
     def is_function(self):
@@ -699,6 +709,7 @@ class Parser:
             fn.name = self.current_token.value
             self.eat(TokenType.ID)
         self.eat(TokenType.LPAREN)
+        sc = self.scope[:]
         fn.params = self.read_func_params()
         self.eat(TokenType.LBRACE)
 
@@ -710,6 +721,7 @@ class Parser:
                 break
             except:
                 stmts.append(self.stmt())
+        self.scope = sc[:]
         fn.nodes = stmts
         fn.locals = self.locals
         return fn
@@ -721,11 +733,7 @@ class Parser:
         name = self.current_token.value
         self.eat(TokenType.ID)
         ty = self.read_type_suffix(ty)
-        var = Var()
-        var.name = name
-        var.ty = ty
-        var.is_local = True
-        self.locals.append(var)
+        var = self.new_lvar(name, ty)
 
         if self.current_token.type == TokenType.SEMI:
             self.eat(TokenType.SEMI)
@@ -800,12 +808,14 @@ class Parser:
             self.eat(TokenType.LBRACE)
             stmt_list = []
 
+            sc = self.scope[:]
             while True:
                 try:
                     self.eat(TokenType.RBRACE)
                     break
                 except:
                     stmt_list.append(self.stmt())
+            self.scope = sc[:]
 
             node = Block()
             node.body = stmt_list
@@ -1016,10 +1026,7 @@ class Parser:
         name = self.current_token.value
         self.eat(TokenType.ID)
         ty = self.read_type_suffix(ty)
-        var = Var()
-        var.name = name
-        var.ty = ty
-        var.is_local = True
+        var = self.new_lvar(name, ty)
         return var
 
     def read_func_params(self):
