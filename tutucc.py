@@ -286,6 +286,21 @@ class Lexer:
         apart into tokens. One token at a time.
         """
         while self.current_char is not None:
+            if self.current_char == '/':
+                if self.peek() == '/':
+                    self.advance()
+                    self.advance()
+                    while self.current_char != '\n':
+                        self.advance()
+                    continue
+                if self.peek() == '*':
+                    if '*/' not in self.text[self.pos:]:
+                        raise Exception('注释没有闭合')
+                    idx = self.text.index('*/', self.pos)
+                    while self.pos != idx + 2:
+                        self.advance()
+                    continue
+
             if self.current_char.isspace():
                 self.skip_whitespace()
                 continue
