@@ -60,6 +60,7 @@ class TokenType(Enum):
     FOR           = 'FOR'
     NULL          = 'NULL'
     SIZEOF        = 'SIZEOF'
+    STRUCT        = 'STRUCT'
     RETURN        = 'RETURN'
     # misc
     ID            = 'ID'
@@ -84,7 +85,9 @@ class TokenType(Enum):
     TYCHAR        = 'TYCHAR'
     TYPTR         = 'TYPTR'
     TYARRAY       = 'TYARRAY'
+    TYSTRUCT      = 'TYSTRUCT'
     STR           = 'STR'
+    MEMBER        = 'MEMBER'
 
 class Token:
     def __init__(self, type, value, lineno=None, column=None):
@@ -259,18 +262,19 @@ class Lexer:
     def read_string_literal(self):
         value = ''
         while self.current_char is not None:
+            if self.current_char == '"':
+                self.advance()
+                break
             if self.current_char == '\\':
                 self.advance()
                 try:
                     value += self.get_escape_char(self.current_char)
                 except:
                     value += chr(self.get_escape_char(self.current_char))
+                self.advance()
             else:
                 value += self.current_char
                 self.advance()
-            if self.current_char == '"':
-                self.advance()
-                break
         value += '\0'
         tok = Token(
             type=TokenType.STR,
@@ -553,12 +557,26 @@ class Program(AST):
         self.globals = []
         self.fns = []
 
+class Member:
+    def __init__(self):
+        self.ty = None
+        self.name = None
+        self.offset = 0
+
+class MemberAst(AST):
+    def __init__(self):
+        self.expr = None
+        self.member = None
+        self.ty = None
+        self.token = Token(TokenType.MEMBER, None)
+
 class Type:
     def __init__(self):
         self.kind = None
-        self.base = None
-        self.size = 0
+        self.base = None    # 指针或者数组
+        self.size = 0       # sizeof()的值
         self.array_len = 0
+        self.members = []   # struct
 
 class IntType(Type):
     def __init__(self):
@@ -629,7 +647,7 @@ class Parser:
 
     def new_gvar(self, name, ty):
         var = self.new_var(name, ty, False)
-        self.globals.append(var)
+        self.globals.insert(0, var)
         return var
 
     def new_var(self, name, ty, is_local):
@@ -638,12 +656,12 @@ class Parser:
         var.ty = ty
         var.is_local = is_local
 
-        self.scope.append(var)
+        self.scope.insert(0, var)
         return var
 
     def new_lvar(self, name, ty):
         var = self.new_var(name, ty, True)
-        self.locals.append(var)
+        self.locals.insert(0, var)
 
         return var
 
@@ -821,13 +839,17 @@ class Parser:
             node.body = stmt_list
             return node
 
-        if self.current_token.type == TokenType.INT or \
-           self.current_token.type == TokenType.CHAR:
+        if self.is_typename():
             return self.declaration()
 
         node = ExprStmt(self.expr())
         self.eat(TokenType.SEMI)
         return node
+
+    def is_typename(self):
+        return self.current_token.type == TokenType.INT or \
+        self.current_token.type == TokenType.CHAR or \
+        self.current_token.type == TokenType.STRUCT
 
     def expr(self):
         return self.assign()
@@ -901,19 +923,27 @@ class Parser:
 
         return node
 
-    # postfix = primary ("[" expr "]")*
+    # postfix = primary ("[" expr "]" | "." ident)*
     def postfix(self):
         node = self.primary()
 
-        while self.current_token.type == TokenType.LBRACKET:
-            # x[y] 是 *(x+y) 的语法糖
-            self.eat(TokenType.LBRACKET)
-            tok = self.current_token
-            exp = self.new_add(node, self.expr(), tok)
-            self.eat(TokenType.RBRACKET)
-            node = Deref()
-            node.expr = exp
-        return node
+        while True:
+            if self.current_token.type == TokenType.LBRACKET:
+                # x[y] 是 *(x+y) 的语法糖
+                self.eat(TokenType.LBRACKET)
+                tok = self.current_token
+                exp = self.new_add(node, self.expr(), tok)
+                self.eat(TokenType.RBRACKET)
+                node = Deref()
+                node.expr = exp
+                continue
+
+            if self.current_token.type == TokenType.DOT:
+                self.eat(TokenType.DOT)
+                node = self.struct_ref(node)
+                continue
+
+            return node
 
     # primary = "(" "{" stmt-expr-tail
     #         | "(" expr ")"
@@ -966,8 +996,6 @@ class Parser:
         self.current_token = self.get_next_token()
 
         return Num(token)
-
-
 
     def new_label(self):
         s = ".L.data.%d" % self.cnt
@@ -1036,7 +1064,6 @@ class Parser:
         
         var_list = []
         v = self.read_func_param()
-        self.locals.append(v)
         var_list.append(v)
 
         while True:
@@ -1046,7 +1073,6 @@ class Parser:
             except:
                 self.eat(TokenType.COMMA)
                 v = self.read_func_param()
-                self.locals.append(v)
                 var_list.append(v)
         
         return var_list
@@ -1055,7 +1081,7 @@ class Parser:
         self.add_type(left)
         self.add_type(right)
         if self.is_integer(left.ty) and self.is_integer(right.ty):
-            return BinOp(left=left, op=tok, right=right)
+            return BinOp(left=left, op=Token(TokenType.PLUS, None), right=right)
         if left.ty.base and self.is_integer(right.ty):
             node = PtrAdd()
             node.left = left
@@ -1147,6 +1173,10 @@ class Parser:
                 node.ty = IntType()
             return
 
+        if node.token.type == TokenType.MEMBER:
+            node.ty = node.member.ty
+            return
+
         if node.token.type == TokenType.STMTEXPR:
             node.ty = node.body[-1].ty
             return
@@ -1169,14 +1199,18 @@ class Parser:
         ty.array_len = len
         return ty
 
-    # basetype = ("char" | "int") "*"*
+    # basetype = ("char" | "int" | struct-decl) "*"*
     def basetype(self):
+        if self.is_typename() is False:
+            raise Exception('这里应该是一个类型名')
         if self.current_token.type == TokenType.CHAR:
             self.eat(TokenType.CHAR)
             ty = CharType()
-        else:
+        elif self.current_token.type == TokenType.INT:
             self.eat(TokenType.INT)
             ty = IntType()
+        else:
+            ty = self.struct_decl()
         while True:
             try:
                 self.eat(TokenType.MUL)
@@ -1185,6 +1219,62 @@ class Parser:
                 break
 
         return ty
+
+    # struct-decl = "struct" "{" struct-member "}"
+    def struct_decl(self):
+        self.eat(TokenType.STRUCT)
+        self.eat(TokenType.LBRACE)
+
+        members = []
+        while True:
+            try:
+                self.eat(TokenType.RBRACE)
+                break
+            except:
+                members.append(self.struct_member())
+
+        ty = Type()
+        ty.kind = TokenType.TYSTRUCT
+        ty.members = members
+        
+        offset = 0
+        for m in ty.members:
+            m.offset = offset
+            offset += m.ty.size
+        ty.size = offset
+
+        return ty
+
+    # struct-member = basetype ident ("[" num "]")* ";"
+    def struct_member(self):
+        mem = Member()
+        mem.ty = self.basetype()
+        mem.name = self.current_token.value
+        self.eat(TokenType.ID)
+        mem.ty = self.read_type_suffix(mem.ty)
+        self.eat(TokenType.SEMI)
+        return mem
+
+    def find_member(self, ty, name):
+        for mem in ty.members:
+            if mem.name == name:
+                return mem
+        return None
+
+    def struct_ref(self, expr):
+        self.add_type(expr)
+        if expr.ty.kind != TokenType.TYSTRUCT:
+            raise Exception('不是一个结构体')
+
+        mem = self.find_member(expr.ty, self.current_token.value)
+        self.eat(TokenType.ID)
+        if mem is None:
+            raise Exception('没有这个成员')
+
+        node = MemberAst()
+        node.expr = expr
+        node.member = mem
+        return node
 
     def gen_addr(self, node):
         if node.token.type == TokenType.VAR:
@@ -1196,6 +1286,12 @@ class Parser:
             return
         if node.token.type == TokenType.DEREF:
             self.code_gen(node.expr)
+            return
+        if node.token.type == TokenType.MEMBER:
+            self.gen_addr(node.expr)
+            print("  pop rax")
+            print("  add rax, %d" % node.member.offset)
+            print("  push rax")
             return
         
         self.error(
@@ -1235,7 +1331,6 @@ class Parser:
 
     def emit_data(self, prog):
         print(".data")
-
         for var in prog.globals:
             print("%s:" % var.name)
             if not var.contents:
@@ -1257,7 +1352,7 @@ class Parser:
             self.code_gen(node.expr)
             print("  add rsp, 8")
             return
-        if node.token.type == TokenType.VAR:
+        if node.token.type == TokenType.VAR or node.token.type == TokenType.MEMBER:
             self.gen_addr(node)
             if node.ty.kind != TokenType.TYARRAY:
                 self.load(node.ty)
@@ -1429,7 +1524,8 @@ def main():
     parser.add_argument('inputfile', help='c source file')
     args = parser.parse_args()
 
-    text = args.inputfile
+    text = open(args.inputfile, 'r').read()
+    # text = args.inputfile
 
     tokens = Lexer(text).lexer()
     try:
@@ -1438,7 +1534,6 @@ def main():
         for fn in prog.fns:
             offset = 0
             # 局部变量是顺序进入数组的，所以需要逆序弹出算偏移量。
-            fn.locals.reverse()
             for v in fn.locals:
                 offset += v.ty.size
                 v.offset = offset
