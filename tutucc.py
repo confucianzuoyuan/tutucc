@@ -1,6 +1,6 @@
 import argparse
 import sys
-from enum import Enum
+from enum import Enum, auto
 
 argreg1 = ["dil", "sil", "dl", "cl", "r8b", "r9b"]
 argreg8 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
@@ -418,6 +418,64 @@ class Lexer:
         # input left for lexical analysis
         return Token(type=TokenType.EOF, value=None)
 
+# AST node
+class NodeKind(Enum):
+    ND_ADD       = auto() # num + num
+    ND_PTR_ADD   = auto() # ptr + num or num + ptr
+    ND_SUB       = auto() # num - num
+    ND_PTR_SUB   = auto() # ptr - num
+    ND_PTR_DIFF  = auto() # ptr - ptr
+    ND_MUL       = auto() # *
+    ND_DIV       = auto() # /
+    ND_EQ        = auto() # ==
+    ND_NE        = auto() # !=
+    ND_LT        = auto() # <
+    ND_LE        = auto() # <=
+    ND_ASSIGN    = auto() # =
+    ND_MEMBER    = auto() # . (struct member access)
+    ND_ADDR      = auto() # unary &
+    ND_DEREF     = auto() # unary *
+    ND_RETURN    = auto() # "return"
+    ND_IF        = auto() # "if"
+    ND_WHILE     = auto() # "while"
+    ND_FOR       = auto() # "for"
+    ND_BLOCK     = auto() # { ... }
+    ND_FUNCALL   = auto() # Function call
+    ND_EXPR_STMT = auto() # Expression statement
+    ND_STMT_EXPR = auto() # Statement expression
+    ND_VAR       = auto() # Variable
+    ND_NUM       = auto() # Integer
+    ND_NULL      = auto() # Empty statement
+
+class Node:
+    def __init__(self):
+        self.kind     = None    # Node kind
+        self.tok      = None    # Representative token
+        self.ty       = None    # Type, e.g. int or pointer to int
+
+        self.lhs      = None    # Left-hand side
+        self.rhs      = None    # Right-hand side
+
+        # "if, "while" or "for" statement
+        self.cond     = None
+        self.then     = None
+        self.els      = None
+        self.init     = None
+        self.inc      = None
+
+        # Block or statement expression
+        self.body     = None
+
+        # Struct member access
+        self.member   = None
+
+        # Function call
+        self.funcname = None
+        self.args     = None
+
+        self.var      = None      # Used if kind == ND_VAR
+        self.val      = None      # Used if kind == ND_NUM
+
 class AST:
     pass
 
@@ -621,6 +679,33 @@ class Parser:
                 return v
         return None
 
+    def new_node(self, kind, tok):
+        node = Node()
+        node.kind = kind
+        node.tok = tok
+        return node
+
+    def new_binary(self, kind, lhs, rhs, tok):
+        node = self.new_node(kind, tok)
+        node.lhs = lhs
+        node.rhs = rhs
+        return node
+
+    def new_unary(self, kind, expr, tok):
+        node = self.new_node(kind, tok)
+        node.lhs = expr
+        return node
+
+    def new_num(self, val, tok):
+        node = self.new_node(NodeKind.ND_NUM, tok)
+        node.val = val
+        return node
+
+    def new_var_node(self, var, tok):
+        node = self.new_node(NodeKind.ND_VAR, tok)
+        node.var = var
+        return node
+
     def get_next_token(self):
         self.current_token_index += 1
         return self.tokens[self.current_token_index]
@@ -644,6 +729,13 @@ class Parser:
                 error_code=ErrorCode.UNEXPECTED_TOKEN,
                 token=self.current_token,
             )
+
+    def consume(self, token_type):
+        try:
+            self.eat(token_type)
+            return True
+        except:
+            return False
 
     def new_gvar(self, name, ty):
         var = self.new_var(name, ty, False)
@@ -695,8 +787,7 @@ class Parser:
         node = StmtExpr()
         node.body = [self.stmt()]
         while True:
-            if self.current_token.type == TokenType.RBRACE:
-                self.eat(TokenType.RBRACE)
+            if self.consume(TokenType.RBRACE):
                 break
             else:
                 node.body.append(self.stmt())
@@ -777,22 +868,19 @@ class Parser:
             self.eat(TokenType.SEMI)
             return node
 
-        if token.type == TokenType.IF:
-            self.eat(TokenType.IF)
+        if self.consume(TokenType.IF):
             node = IfStmt()
-            if self.current_token.type == TokenType.LPAREN:
-                self.eat(TokenType.LPAREN)
+            # if self.current_token.type == TokenType.LPAREN:
+            self.eat(TokenType.LPAREN)
             node.cond = self.expr()
-            if self.current_token.type == TokenType.RPAREN:
-                self.eat(TokenType.RPAREN)
+            # if self.current_token.type == TokenType.RPAREN:
+            self.eat(TokenType.RPAREN)
             node.then = self.stmt()
-            if self.current_token.type == TokenType.ELSE:
-                self.eat(TokenType.ELSE)
-            node.els = self.stmt()
+            if self.consume(TokenType.ELSE):
+                node.els = self.stmt()
             return node
 
-        if token.type == TokenType.WHILE:
-            self.eat(TokenType.WHILE)
+        if self.consume(TokenType.WHILE):
             node = WhileStmt()
             self.eat(TokenType.LPAREN)
             node.cond = self.expr()
@@ -800,30 +888,19 @@ class Parser:
             node.then = self.stmt()
             return node
 
-        if token.type == TokenType.FOR:
-            self.eat(TokenType.FOR)
+        if self.consume(TokenType.FOR):
             node = ForStmt()
             self.eat(TokenType.LPAREN)
-            try:
-                self.eat(TokenType.SEMI)
-            except:
+            while not self.consume(TokenType.SEMI):
                 node.init = ExprStmt(self.expr())
-                self.eat(TokenType.SEMI)
-            try:
-                self.eat(TokenType.SEMI)
-            except:
+            while not self.consume(TokenType.SEMI):
                 node.cond = self.expr()
-                self.eat(TokenType.SEMI)
-            try:
-                self.eat(TokenType.RPAREN)
-            except:
+            while not self.consume(TokenType.RPAREN):
                 node.inc = ExprStmt(self.expr())
-                self.eat(TokenType.RPAREN)
             node.then = self.stmt()
             return node
 
-        if token.type == TokenType.LBRACE:
-            self.eat(TokenType.LBRACE)
+        if self.consume(TokenType.LBRACE):
             stmt_list = []
 
             sc = self.scope[:]
@@ -858,8 +935,7 @@ class Parser:
         node = self.equality()
 
         token = self.current_token
-        if token.type == TokenType.ASSIGN:
-            self.eat(TokenType.ASSIGN)
+        if self.consume(TokenType.ASSIGN):
             node = Assign(left=node, op=token, right=self.assign())
         return node
 
@@ -868,10 +944,7 @@ class Parser:
 
         while self.current_token.type in (TokenType.EQ, TokenType.NE):
             token = self.current_token
-            if token.type == TokenType.EQ:
-                self.eat(TokenType.EQ)
-            elif token.type == TokenType.NE:
-                self.eat(TokenType.NE)
+            self.eat(token.type)
             
             node = BinOp(left=node, op=token, right=self.relational())
 
@@ -882,15 +955,7 @@ class Parser:
 
         while self.current_token.type in (TokenType.LT, TokenType.LE, TokenType.GT, TokenType.GE):
             token = self.current_token
-            if token.type == TokenType.LT:
-                self.eat(TokenType.LT)
-            elif token.type == TokenType.LE:
-                self.eat(TokenType.LE)
-            elif token.type == TokenType.GT:
-                self.eat(TokenType.GT)
-            elif token.type == TokenType.GE:
-                self.eat(TokenType.GE)
-
+            self.eat(token.type)
             node = BinOp(left=node, op=token, right=self.add())
 
         return node
@@ -900,11 +965,9 @@ class Parser:
 
         while self.current_token.type in (TokenType.PLUS, TokenType.MINUS):
             token = self.current_token
-            if token.type == TokenType.PLUS:
-                self.eat(TokenType.PLUS)
+            if self.consume(TokenType.PLUS):
                 node = self.new_add(node, self.mul(), token)
-            elif token.type == TokenType.MINUS:
-                self.eat(TokenType.MINUS)
+            elif self.consume(TokenType.MINUS):
                 node = self.new_sub(node, self.mul(), token)
 
         return node
@@ -914,11 +977,7 @@ class Parser:
 
         while self.current_token.type in (TokenType.MUL, TokenType.DIV):
             token = self.current_token
-            if token.type == TokenType.MUL:
-                self.eat(TokenType.MUL)
-            elif token.type == TokenType.DIV:
-                self.eat(TokenType.DIV)
-
+            self.eat(token.type)
             node = BinOp(left=node, op=token, right=self.unary())
 
         return node
@@ -928,9 +987,8 @@ class Parser:
         node = self.primary()
 
         while True:
-            if self.current_token.type == TokenType.LBRACKET:
+            if self.consume(TokenType.LBRACKET):
                 # x[y] 是 *(x+y) 的语法糖
-                self.eat(TokenType.LBRACKET)
                 tok = self.current_token
                 exp = self.new_add(node, self.expr(), tok)
                 self.eat(TokenType.RBRACKET)
@@ -938,8 +996,7 @@ class Parser:
                 node.expr = exp
                 continue
 
-            if self.current_token.type == TokenType.DOT:
-                self.eat(TokenType.DOT)
+            if self.consume(TokenType.DOT):
                 node = self.struct_ref(node)
                 continue
 
@@ -953,27 +1010,22 @@ class Parser:
     #         | num
     def primary(self):
         token = self.current_token
-        if token.type == TokenType.LPAREN:
-            self.eat(TokenType.LPAREN)
-            if self.current_token.type == TokenType.LBRACE:
-                self.eat(TokenType.LBRACE)
+        if self.consume(TokenType.LPAREN):
+            if self.consume(TokenType.LBRACE):
                 return self.stmt_expr(token)
             node = self.expr()
             self.eat(TokenType.RPAREN)
             return node
 
-        if token.type == TokenType.SIZEOF:
-            self.eat(TokenType.SIZEOF)
+        if self.consume(TokenType.SIZEOF):
             node = self.unary()
             self.add_type(node)
             return Num(token=Token(type=TokenType.INTEGER_CONST, value=node.ty.size))
 
-        if token.type == TokenType.ID:
-            self.eat(TokenType.ID)
+        if self.consume(TokenType.ID):
 
             # 函数调用
-            if self.current_token.type == TokenType.LPAREN:
-                self.eat(TokenType.LPAREN)
+            if self.consume(TokenType.LPAREN):
                 node = FunCall()
                 node.funcname = token.value
                 node.args = self.func_args()
@@ -1006,33 +1058,27 @@ class Parser:
     #       | postfix
     def unary(self):
         token = self.current_token
-        if token.type == TokenType.PLUS:
-            self.eat(TokenType.PLUS)
+        if self.consume(TokenType.PLUS):
             return self.primary()
-        if token.type == TokenType.MINUS:
-            self.eat(TokenType.MINUS)
+        if self.consume(TokenType.MINUS):
             zero = Num(Token(type=TokenType.INTEGER_CONST, value=0))
             return BinOp(left=zero, op=token, right=self.unary())
-        if token.type == TokenType.ADDR:
-            self.eat(TokenType.ADDR)
+        if self.consume(TokenType.ADDR):
             node = Addr()
             node.expr = self.unary()
             return node
-        if token.type == TokenType.MUL:
-            self.eat(TokenType.MUL)
+        if self.consume(TokenType.MUL):
             node = Deref()
             node.expr = self.unary()
             return node
         return self.postfix()
 
     def func_args(self):
-        if self.current_token.type == TokenType.RPAREN:
-            self.eat(TokenType.RPAREN)
+        if self.consume(TokenType.RPAREN):
             return []
         args_list = [self.assign()]
         while True:
-            if self.current_token.type == TokenType.COMMA:
-                self.eat(TokenType.COMMA)
+            if self.consume(TokenType.COMMA):
                 args_list.append(self.assign())
             else:
                 break
@@ -1058,8 +1104,7 @@ class Parser:
         return var
 
     def read_func_params(self):
-        if self.current_token.type == TokenType.RPAREN:
-            self.eat(TokenType.RPAREN)
+        if self.consume(TokenType.RPAREN):
             return []
         
         var_list = []
