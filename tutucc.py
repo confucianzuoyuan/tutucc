@@ -68,19 +68,7 @@ class TokenType(Enum):
     REAL_CONST    = 'REAL_CONST'
     ASSIGN        = '='
     EOF           = 'EOF'
-    EXPRSTMT      = 'EXPRSTMT'
-    STMTEXPR      = 'STMTEXPR'
-    VAR           = 'VAR'
-    IFSTMT        = 'IFSTMT'
-    WHILESTMT     = 'WHILESTMT'
-    FORSTMT       = 'FORSTMT'
-    BLOCK         = 'BLOCK'
-    FUNCALL       = 'FUNCALL'
     ADDR          = '&'
-    DEREF         = 'DEREF'
-    PTRADD        = 'PTRADD'
-    PTRSUB        = 'PTRSUB'
-    PTRDIFF       = 'PTRDIFF'
     TYINT         = 'TYINT'
     TYCHAR        = 'TYCHAR'
     TYPTR         = 'TYPTR'
@@ -476,57 +464,15 @@ class Node:
         self.var      = None      # Used if kind == ND_VAR
         self.val      = None      # Used if kind == ND_NUM
 
-class AST:
-    pass
-
-class BinOp(AST):
-    def __init__(self, left, op, right):
-        self.left = left
-        self.token = self.op = op
-        self.right = right
-        self.ty = None
-
-class UnaryOp(AST):
-    def __init__(self, op, expr):
-        self.token = self.op = op
-        self.expr = expr
-        self.ty = None
-
-class Assign(AST):
-    def __init__(self, left, op, right):
-        self.left = left
-        self.token = self.op = op
-        self.right = right
-        self.ty = None
-
-class Num(AST):
-    def __init__(self, token):
-        self.token = token
-        self.value = token.value
-        self.ty = None
-
-class ExprStmt(AST):
-    def __init__(self, expr):
-        self.token = Token(TokenType.EXPRSTMT, None)
-        self.expr = expr
-        self.ty = None
-
-class StmtExpr(AST):
-    def __init__(self):
-        self.token = Token(TokenType.STMTEXPR, None)
-        self.body = []
-        self.ty = None
-
-class Var(AST):
+class Var:
     def __init__(self):
         self.name = None
         self.offset = 0
-        self.token = Token(TokenType.VAR, None)
         self.ty = None
         self.is_local = None
         self.contents = None
 
-class Function(AST):
+class Function:
     def __init__(self):
         self.name = None
         self.nodes = []
@@ -535,82 +481,7 @@ class Function(AST):
         self.stack_size = 0
         self.ty = None
 
-class IfStmt(AST):
-    def __init__(self):
-        self.token = Token(TokenType.IFSTMT, None)
-        self.cond = None
-        self.then = None
-        self.els = None
-        self.ty = None
-
-class WhileStmt(AST):
-    def __init__(self):
-        self.token = Token(TokenType.WHILESTMT, None)
-        self.cond = None
-        self.then = None
-        self.ty = None
-
-class ForStmt(AST):
-    def __init__(self):
-        self.token = Token(TokenType.FORSTMT, None)
-        self.init = None
-        self.cond = None
-        self.then = None
-        self.inc  = None
-        self.ty = None
-
-class Block(AST):
-    def __init__(self):
-        self.token = Token(TokenType.BLOCK, None)
-        self.body = []
-        self.ty = None
-
-class FunCall(AST):
-    def __init__(self):
-        self.token = Token(TokenType.FUNCALL, None)
-        self.funcname = None
-        self.args     = []
-        self.ty = None
-
-class Addr(AST):
-    def __init__(self):
-        self.token = Token(TokenType.ADDR, None)
-        self.expr = None
-        self.ty = None
-
-class Deref(AST):
-    def __init__(self):
-        self.token = Token(TokenType.DEREF, None)
-        self.expr = None
-        self.ty = None
-
-class PtrAdd(AST):
-    def __init__(self):
-        self.token = self.op = Token(TokenType.PTRADD, None)
-        self.ty = None
-        self.left = None
-        self.right = None
-
-class PtrSub(AST):
-    def __init__(self):
-        self.token = self.op = Token(TokenType.PTRSUB, None)
-        self.ty = None
-        self.left = None
-        self.right = None
-
-class PtrDiff(AST):
-    def __init__(self):
-        self.token = self.op = Token(TokenType.PTRDIFF, None)
-        self.ty = None
-        self.left = None
-        self.right = None
-
-class NullAst(AST):
-    def __init__(self):
-        self.token = Token(TokenType.NULL, None)
-        self.ty = None
-
-class Program(AST):
+class Program:
     def __init__(self):
         self.globals = []
         self.fns = []
@@ -620,13 +491,6 @@ class Member:
         self.ty = None
         self.name = None
         self.offset = 0
-
-class MemberAst(AST):
-    def __init__(self):
-        self.expr = None
-        self.member = None
-        self.ty = None
-        self.token = Token(TokenType.MEMBER, None)
 
 class Type:
     def __init__(self):
@@ -757,20 +621,19 @@ class Parser:
 
         return var
 
-    def is_function(self):
-        idx = self.current_token_index
-        self.basetype()
+    def consume_ident(self):
         if self.current_token.type != TokenType.ID:
             return False
         self.eat(TokenType.ID)
-        if self.current_token.type != TokenType.LPAREN:
-            self.current_token_index = idx
-            self.current_token = self.tokens[self.current_token_index]
-            return False
-        self.eat(TokenType.LPAREN)
+        return True
+        
+    def is_function(self):
+        idx = self.current_token_index
+        self.basetype()
+        isfunc = self.consume_ident() and self.consume(TokenType.LPAREN)
         self.current_token_index = idx
         self.current_token = self.tokens[self.current_token_index]
-        return True
+        return isfunc
 
     # global-var = basetype ident ("[" num "]")* ";"
     def global_var(self):
@@ -784,7 +647,7 @@ class Parser:
     # stmt-expr = "(" "{" stmt stmt* "}" ")"
     # Statement expression is a GNU C extension.
     def stmt_expr(self, tok):
-        node = StmtExpr()
+        node = self.new_node(NodeKind.ND_STMT_EXPR, tok)
         node.body = [self.stmt()]
         while True:
             if self.consume(TokenType.RBRACE):
@@ -792,7 +655,7 @@ class Parser:
             else:
                 node.body.append(self.stmt())
         self.eat(TokenType.RPAREN)
-        node.body[-1] = node.body[-1].expr
+        node.body[-1] = node.body[-1].lhs
         return node
 
     # program = (global-var | function)*
@@ -844,16 +707,19 @@ class Parser:
         ty = self.read_type_suffix(ty)
         var = self.new_lvar(name, ty)
 
-        if self.current_token.type == TokenType.SEMI:
-            self.eat(TokenType.SEMI)
-            return NullAst()
+        if self.consume(TokenType.SEMI):
+            return self.new_node(NodeKind.ND_NULL, token)
 
         self.eat(TokenType.ASSIGN)
-        left = var
-        right = self.expr()
+        lhs = self.new_var_node(var, token)
+        rhs = self.expr()
         self.eat(TokenType.SEMI)
-        node = Assign(left=left, op=Token(TokenType.ASSIGN, value='='), right=right)
-        return ExprStmt(expr=node)
+        node = self.new_binary(NodeKind.ND_ASSIGN, lhs, rhs, token)
+        return self.new_unary(NodeKind.ND_EXPR_STMT, node, token)
+
+    def read_expr_stmt(self):
+        token = self.current_token
+        return self.new_unary(NodeKind.ND_EXPR_STMT, self.expr(), token)
 
     def stmt(self):
         node = self.stmt2()
@@ -862,18 +728,15 @@ class Parser:
 
     def stmt2(self):
         token = self.current_token
-        if token.type == TokenType.RETURN:
-            self.eat(TokenType.RETURN)
-            node = UnaryOp(op=token, expr=self.expr())
+        if self.consume(TokenType.RETURN):
+            node = self.new_unary(NodeKind.ND_RETURN, self.expr(), token)
             self.eat(TokenType.SEMI)
             return node
 
         if self.consume(TokenType.IF):
-            node = IfStmt()
-            # if self.current_token.type == TokenType.LPAREN:
+            node = self.new_node(NodeKind.ND_IF, token)
             self.eat(TokenType.LPAREN)
             node.cond = self.expr()
-            # if self.current_token.type == TokenType.RPAREN:
             self.eat(TokenType.RPAREN)
             node.then = self.stmt()
             if self.consume(TokenType.ELSE):
@@ -881,7 +744,7 @@ class Parser:
             return node
 
         if self.consume(TokenType.WHILE):
-            node = WhileStmt()
+            node = self.new_node(NodeKind.ND_WHILE, token)
             self.eat(TokenType.LPAREN)
             node.cond = self.expr()
             self.eat(TokenType.RPAREN)
@@ -889,14 +752,14 @@ class Parser:
             return node
 
         if self.consume(TokenType.FOR):
-            node = ForStmt()
+            node = self.new_node(NodeKind.ND_FOR, token)
             self.eat(TokenType.LPAREN)
             while not self.consume(TokenType.SEMI):
-                node.init = ExprStmt(self.expr())
+                node.init = self.read_expr_stmt()
             while not self.consume(TokenType.SEMI):
                 node.cond = self.expr()
             while not self.consume(TokenType.RPAREN):
-                node.inc = ExprStmt(self.expr())
+                node.inc = self.read_expr_stmt()
             node.then = self.stmt()
             return node
 
@@ -912,14 +775,14 @@ class Parser:
                     stmt_list.append(self.stmt())
             self.scope = sc[:]
 
-            node = Block()
+            node = self.new_node(NodeKind.ND_BLOCK, token)
             node.body = stmt_list
             return node
 
         if self.is_typename():
             return self.declaration()
 
-        node = ExprStmt(self.expr())
+        node = self.read_expr_stmt()
         self.eat(TokenType.SEMI)
         return node
 
@@ -936,29 +799,36 @@ class Parser:
 
         token = self.current_token
         if self.consume(TokenType.ASSIGN):
-            node = Assign(left=node, op=token, right=self.assign())
+            node = self.new_binary(NodeKind.ND_ASSIGN, node, self.assign(), token)
         return node
 
     def equality(self):
         node = self.relational()
 
-        while self.current_token.type in (TokenType.EQ, TokenType.NE):
+        while True:
             token = self.current_token
-            self.eat(token.type)
-            
-            node = BinOp(left=node, op=token, right=self.relational())
-
-        return node
+            if self.consume(TokenType.EQ):
+                node = self.new_binary(NodeKind.ND_EQ, node, self.relational(), token)
+            elif self.consume(TokenType.NE):
+                node = self.new_binary(NodeKind.ND_NE, node, self.relational(), token)
+            else:
+                return node
 
     def relational(self):
         node = self.add()
 
-        while self.current_token.type in (TokenType.LT, TokenType.LE, TokenType.GT, TokenType.GE):
+        while True:
             token = self.current_token
-            self.eat(token.type)
-            node = BinOp(left=node, op=token, right=self.add())
-
-        return node
+            if self.consume(TokenType.LT):
+                node = self.new_binary(NodeKind.ND_LT, node, self.add(), token)
+            elif self.consume(TokenType.LE):
+                node = self.new_binary(NodeKind.ND_LE, node, self.add(), token)
+            elif self.consume(TokenType.GT):
+                node = self.new_binary(NodeKind.ND_LT, self.add(), node, token)
+            elif self.consume(TokenType.GE):
+                node = self.new_binary(NodeKind.ND_LE, self.add(), node, token)
+            else:
+                return node
 
     def add(self):
         node = self.mul()
@@ -974,13 +844,14 @@ class Parser:
 
     def mul(self):
         node = self.unary()
-
-        while self.current_token.type in (TokenType.MUL, TokenType.DIV):
+        while True:
             token = self.current_token
-            self.eat(token.type)
-            node = BinOp(left=node, op=token, right=self.unary())
-
-        return node
+            if self.consume(TokenType.MUL):
+                node = self.new_binary(NodeKind.ND_MUL, node, self.unary(), token)
+            elif self.consume(TokenType.DIV):
+                node = self.new_binary(NodeKind.ND_DIV, node, self.unary(), token)
+            else:
+                return node
 
     # postfix = primary ("[" expr "]" | "." ident)*
     def postfix(self):
@@ -989,11 +860,10 @@ class Parser:
         while True:
             if self.consume(TokenType.LBRACKET):
                 # x[y] 是 *(x+y) 的语法糖
-                tok = self.current_token
-                exp = self.new_add(node, self.expr(), tok)
+                token = self.current_token
+                expr = self.new_add(node, self.expr(), token)
                 self.eat(TokenType.RBRACKET)
-                node = Deref()
-                node.expr = exp
+                node = self.new_unary(NodeKind.ND_DEREF, expr, token)
                 continue
 
             if self.consume(TokenType.DOT):
@@ -1020,13 +890,13 @@ class Parser:
         if self.consume(TokenType.SIZEOF):
             node = self.unary()
             self.add_type(node)
-            return Num(token=Token(type=TokenType.INTEGER_CONST, value=node.ty.size))
+            return self.new_num(node.ty.size, token)
 
         if self.consume(TokenType.ID):
 
             # 函数调用
             if self.consume(TokenType.LPAREN):
-                node = FunCall()
+                node = self.new_node(NodeKind.ND_FUNCALL, token)
                 node.funcname = token.value
                 node.args = self.func_args()
                 return node
@@ -1035,7 +905,7 @@ class Parser:
             var = self.find_var(token)
             if var is None:
                 raise Exception("没有找到变量")
-            return var
+            return self.new_var_node(var, token)
 
         if token.type == TokenType.STR:
             self.current_token = self.get_next_token()
@@ -1043,11 +913,16 @@ class Parser:
             ty = self.array_of(CharType(), len(token.value))
             var = self.new_gvar(self.new_label(), ty)
             var.contents = token.value
-            return var
+            return self.new_var_node(var, token)
 
-        self.current_token = self.get_next_token()
+        return self.new_num(self.expect_number(), token)
 
-        return Num(token)
+    def expect_number(self):
+        if self.current_token.type != TokenType.INTEGER_CONST:
+            raise Exception('这里应该是一个数')
+        val = self.current_token.value
+        self.eat(TokenType.INTEGER_CONST)
+        return val
 
     def new_label(self):
         s = ".L.data.%d" % self.cnt
@@ -1061,16 +936,11 @@ class Parser:
         if self.consume(TokenType.PLUS):
             return self.primary()
         if self.consume(TokenType.MINUS):
-            zero = Num(Token(type=TokenType.INTEGER_CONST, value=0))
-            return BinOp(left=zero, op=token, right=self.unary())
+            return self.new_binary(NodeKind.ND_SUB, self.new_num(0, token), self.unary(), token)
         if self.consume(TokenType.ADDR):
-            node = Addr()
-            node.expr = self.unary()
-            return node
+            return self.new_unary(NodeKind.ND_ADDR, self.unary(), token)
         if self.consume(TokenType.MUL):
-            node = Deref()
-            node.expr = self.unary()
-            return node
+            return self.new_unary(NodeKind.ND_DEREF, self.unary(), token)
         return self.postfix()
 
     def func_args(self):
@@ -1089,11 +959,11 @@ class Parser:
         if self.current_token.type != TokenType.LBRACKET:
             return base
         self.eat(TokenType.LBRACKET)
-        sz = Num(self.current_token)
+        sz = self.current_token.value
         self.current_token = self.get_next_token()
         self.eat(TokenType.RBRACKET)
         base = self.read_type_suffix(base)
-        return self.array_of(base, sz.value)
+        return self.array_of(base, sz)
 
     def read_func_param(self):
         ty = self.basetype()
@@ -1122,107 +992,92 @@ class Parser:
         
         return var_list
 
-    def new_add(self, left, right, tok):
-        self.add_type(left)
-        self.add_type(right)
-        if self.is_integer(left.ty) and self.is_integer(right.ty):
-            return BinOp(left=left, op=Token(TokenType.PLUS, None), right=right)
-        if left.ty.base and self.is_integer(right.ty):
-            node = PtrAdd()
-            node.left = left
-            node.right = right
-            return node
-        if self.is_integer(left.ty) and right.ty.base:
-            node = PtrAdd()
-            node.left = right
-            node.right = left
-            return node
+    def new_add(self, lhs, rhs, token):
+        self.add_type(lhs)
+        self.add_type(rhs)
+        if self.is_integer(lhs.ty) and self.is_integer(rhs.ty):
+            return self.new_binary(NodeKind.ND_ADD, lhs, rhs, token)
+        if lhs.ty.base and self.is_integer(rhs.ty):
+            return self.new_binary(NodeKind.ND_PTR_ADD, lhs, rhs, token)
+        if self.is_integer(lhs.ty) and rhs.ty.base:
+            return self.new_binary(NodeKind.ND_PTR_ADD, rhs, lhs, token)
+        raise Exception('不合法的操作符')
 
-    def new_sub(self, left, right, tok):
-        self.add_type(left)
-        self.add_type(right)
+    def new_sub(self, lhs, rhs, tok):
+        self.add_type(lhs)
+        self.add_type(rhs)
 
-        if self.is_integer(left.ty) and self.is_integer(right.ty):
-            return BinOp(left=left, op=tok, right=right)
-        if left.ty.base and self.is_integer(right.ty):
-            node = PtrSub()
-            node.left = left
-            node.right = right
-            return node
-        if left.ty.base and right.ty.base:
-            node = PtrDiff()
-            node.left = left
-            node.right = right
-            return node
+        if self.is_integer(lhs.ty) and self.is_integer(rhs.ty):
+            return self.new_binary(NodeKind.ND_SUB, lhs, rhs, tok)
+        if lhs.ty.base and self.is_integer(rhs.ty):
+            return self.new_binary(NodeKind.ND_PTR_SUB, lhs, rhs, tok)
+        if lhs.ty.base and rhs.ty.base:
+            return self.new_binary(NodeKind.ND_PTR_DIFF, lhs, rhs, tok)
+        raise Exception('不合法的操作符')
 
     def add_type(self, node):
         if node is None or node.ty is not None:
             return
 
-        if hasattr(node, 'left'):
-            self.add_type(node.left)
-        if hasattr(node, 'right'):
-            self.add_type(node.right)
-        if hasattr(node, 'cond'):
-            self.add_type(node.cond)
-        if hasattr(node, 'then'):
-            self.add_type(node.then)
-        if hasattr(node, 'els'):
-            self.add_type(node.els)
-        if hasattr(node, 'init'):
-            self.add_type(node.init)
-        if hasattr(node, 'inc'):
-            self.add_type(node.inc)
-        if hasattr(node, 'expr'):
-            self.add_type(node.expr)
+        self.add_type(node.lhs)
+        self.add_type(node.rhs)
+        self.add_type(node.cond)
+        self.add_type(node.then)
+        self.add_type(node.els)
+        self.add_type(node.init)
+        self.add_type(node.inc)
 
-        if hasattr(node, 'body'):
+        if node.body:
             for n in node.body:
                 self.add_type(n)
-        if hasattr(node, 'args'):
+        if node.args:
             for n in node.args:
                 self.add_type(n)
 
-        if node.token.type == TokenType.PLUS or    \
-           node.token.type == TokenType.MINUS or   \
-           node.token.type == TokenType.PTRDIFF or \
-           node.token.type == TokenType.MUL or     \
-           node.token.type == TokenType.DIV or     \
-           node.token.type == TokenType.EQ or      \
-           node.token.type == TokenType.NE or      \
-           node.token.type == TokenType.LT or      \
-           node.token.type == TokenType.LE or      \
-           node.token.type == TokenType.VAR or     \
-           node.token.type == TokenType.FUNCALL or \
-           node.token.type == TokenType.INTEGER_CONST:
+        if node.kind == NodeKind.ND_ADD or    \
+           node.kind == NodeKind.ND_SUB or   \
+           node.kind == NodeKind.ND_PTR_DIFF or \
+           node.kind == NodeKind.ND_MUL or     \
+           node.kind == NodeKind.ND_DIV or     \
+           node.kind == NodeKind.ND_EQ or      \
+           node.kind == NodeKind.ND_NE or      \
+           node.kind == NodeKind.ND_LT or      \
+           node.kind == NodeKind.ND_LE or      \
+           node.kind == NodeKind.ND_FUNCALL or \
+           node.kind == NodeKind.ND_NUM:
             node.ty = IntType()
             return
 
-        if node.token.type == TokenType.PTRADD or \
-           node.token.type == TokenType.PTRSUB or \
-           node.token.type == TokenType.ASSIGN:
-            node.ty = node.left.ty
+        if node.kind == NodeKind.ND_PTR_ADD or \
+           node.kind == NodeKind.ND_PTR_SUB or \
+           node.kind == NodeKind.ND_ASSIGN:
+            node.ty = node.lhs.ty
             return
 
-        if node.token.type == TokenType.ADDR:
-            if node.expr.ty.kind == TokenType.TYARRAY:
-                node.ty = self.pointer_to(node.expr.ty.base)
+        if node.kind == NodeKind.ND_VAR:
+            node.ty = node.var.ty
+            return
+
+        if node.kind == NodeKind.ND_MEMBER:
+            node.ty = node.member.ty
+            return
+
+        if node.kind == NodeKind.ND_ADDR:
+            if node.lhs.ty.kind == TokenType.TYARRAY:
+                node.ty = self.pointer_to(node.lhs.ty.base)
             else:
-                node.ty = self.pointer_to(node.expr.ty)
+                node.ty = self.pointer_to(node.lhs.ty)
             return
 
-        if node.token.type == TokenType.DEREF:
-            if node.expr.ty.base is not None:
-                node.ty = node.expr.ty.base
+        if node.kind == NodeKind.ND_DEREF:
+            if node.lhs.ty.base is not None:
+                node.ty = node.lhs.ty.base
             else:
                 node.ty = IntType()
             return
 
-        if node.token.type == TokenType.MEMBER:
-            node.ty = node.member.ty
-            return
 
-        if node.token.type == TokenType.STMTEXPR:
+        if node.kind == NodeKind.ND_STMT_EXPR:
             node.ty = node.body[-1].ty
             return
 
@@ -1306,34 +1161,34 @@ class Parser:
                 return mem
         return None
 
-    def struct_ref(self, expr):
-        self.add_type(expr)
-        if expr.ty.kind != TokenType.TYSTRUCT:
+    def struct_ref(self, lhs):
+        self.add_type(lhs)
+        if lhs.ty.kind != TokenType.TYSTRUCT:
             raise Exception('不是一个结构体')
 
-        mem = self.find_member(expr.ty, self.current_token.value)
+        tok = self.current_token
+        mem = self.find_member(lhs.ty, tok.value)
         self.eat(TokenType.ID)
         if mem is None:
             raise Exception('没有这个成员')
 
-        node = MemberAst()
-        node.expr = expr
+        node = self.new_unary(NodeKind.ND_MEMBER, lhs, tok)
         node.member = mem
         return node
 
     def gen_addr(self, node):
-        if node.token.type == TokenType.VAR:
-            if node.is_local:
-                print("  lea rax, [rbp-%d]" % node.offset)
+        if node.kind == NodeKind.ND_VAR:
+            if node.var.is_local:
+                print("  lea rax, [rbp-%d]" % node.var.offset)
                 print("  push rax")
             else:
-                print("  push offset %s" % node.name)
+                print("  push offset %s" % node.var.name)
             return
-        if node.token.type == TokenType.DEREF:
-            self.code_gen(node.expr)
+        if node.kind == NodeKind.ND_DEREF:
+            self.code_gen(node.lhs)
             return
-        if node.token.type == TokenType.MEMBER:
-            self.gen_addr(node.expr)
+        if node.kind == NodeKind.ND_MEMBER:
+            self.gen_addr(node.lhs)
             print("  pop rax")
             print("  add rax, %d" % node.member.offset)
             print("  push rax")
@@ -1388,34 +1243,34 @@ class Parser:
         return (n + align - 1) & ~(align - 1)
 
     def code_gen(self, node):
-        if node.token.type == TokenType.NULL:
+        if node.kind == NodeKind.ND_NULL:
             return
-        if node.token.type == TokenType.INTEGER_CONST:
-            print("  push %s" % node.value)
+        if node.kind == NodeKind.ND_NUM:
+            print("  push %s" % node.val)
             return
-        if node.token.type == TokenType.EXPRSTMT:
-            self.code_gen(node.expr)
+        if node.kind == NodeKind.ND_EXPR_STMT:
+            self.code_gen(node.lhs)
             print("  add rsp, 8")
             return
-        if node.token.type == TokenType.VAR or node.token.type == TokenType.MEMBER:
+        if node.kind == NodeKind.ND_VAR or node.kind == NodeKind.ND_MEMBER:
             self.gen_addr(node)
             if node.ty.kind != TokenType.TYARRAY:
                 self.load(node.ty)
             return
-        if node.token.type == TokenType.ASSIGN:
-            self.gen_lvar(node.left)
-            self.code_gen(node.right)
+        if node.kind == NodeKind.ND_ASSIGN:
+            self.gen_lvar(node.lhs)
+            self.code_gen(node.rhs)
             self.store(node.ty)
             return
-        if node.token.type == TokenType.ADDR:
-            self.gen_addr(node.expr)
+        if node.kind == NodeKind.ND_ADDR:
+            self.gen_addr(node.lhs)
             return
-        if node.token.type == TokenType.DEREF:
-            self.code_gen(node.expr)
+        if node.kind == NodeKind.ND_DEREF:
+            self.code_gen(node.lhs)
             if node.ty.kind != TokenType.TYARRAY:
                 self.load(node.ty)
             return
-        if node.token.type == TokenType.IFSTMT:
+        if node.kind == NodeKind.ND_IF:
             seq = self.labelseq
             self.labelseq += 1
             if node.els is not None:
@@ -1436,7 +1291,7 @@ class Parser:
                 self.code_gen(node.then)
                 print(".L.end.%d:" % seq)
             return
-        if node.token.type == TokenType.WHILESTMT:
+        if node.kind == NodeKind.ND_WHILE:
             seq = self.labelseq
             self.labelseq += 1
             print(".L.begin.%d:" % seq)
@@ -1448,7 +1303,7 @@ class Parser:
             print("  jmp .L.begin.%d" % seq)
             print(".L.end.%d:" % seq)
             return
-        if node.token.type == TokenType.FORSTMT:
+        if node.kind == NodeKind.ND_FOR:
             seq = self.labelseq
             self.labelseq += 1
             if node.init is not None:
@@ -1465,11 +1320,11 @@ class Parser:
             print("  jmp .L.begin.%d" % seq)
             print(".L.end.%d:" % seq)
             return
-        if node.token.type == TokenType.BLOCK or node.token.type == TokenType.STMTEXPR:
+        if node.kind == NodeKind.ND_BLOCK or node.kind == NodeKind.ND_STMT_EXPR:
             for n in node.body:
                 self.code_gen(n)
             return
-        if node.token.type == TokenType.FUNCALL:
+        if node.kind == NodeKind.ND_FUNCALL:
             for arg in node.args:
                 self.code_gen(arg)
             for i in range(len(node.args)-1, -1, -1):
@@ -1492,62 +1347,54 @@ class Parser:
             print(".L.end.%d:" % seq)
             print("  push rax")
             return
-        if node.token.type == TokenType.RETURN:
-            self.code_gen(node.expr)
+        if node.kind == NodeKind.ND_RETURN:
+            self.code_gen(node.lhs)
             print("  pop rax")
             print("  jmp .L.return.%s" % self.funcname)
             return
 
-        self.code_gen(node.left)
-        self.code_gen(node.right)
+        self.code_gen(node.lhs)
+        self.code_gen(node.rhs)
 
         print("  pop rdi")
         print("  pop rax")
 
-        if node.op.type == TokenType.PLUS:
+        if node.kind == NodeKind.ND_ADD:
             print("  add rax, rdi")
-        if node.op.type == TokenType.PTRADD:
+        if node.kind == NodeKind.ND_PTR_ADD:
             print("  imul rdi, %d" % node.ty.base.size)
             print("  add rax, rdi")
-        if node.op.type == TokenType.MINUS:
+        if node.kind == NodeKind.ND_SUB:
             print("  sub rax, rdi")
-        if node.op.type == TokenType.PTRSUB:
+        if node.kind == NodeKind.ND_PTR_SUB:
             print("  imul rdi, %d" % node.ty.base.size)
             print("  sub rax, rdi")
-        if node.op.type == TokenType.PTRDIFF:
+        if node.kind == NodeKind.ND_PTR_DIFF:
             print("  sub rax, rdi")
             print("  cqo")
-            print("  mov rdi, %d" % node.left.ty.base.size)
+            print("  mov rdi, %d" % node.lhs.ty.base.size)
             print("  idiv rdi")
-        if node.op.type == TokenType.MUL:
+        if node.kind == NodeKind.ND_MUL:
             print("  imul rax, rdi")
-        if node.op.type == TokenType.DIV:
+        if node.kind == NodeKind.ND_DIV:
             print("  cqo")
             print("  idiv rdi")
-        if node.op.type == TokenType.EQ:
+        if node.kind == NodeKind.ND_EQ:
             print("  cmp rax, rdi")
             print("  sete al")
             print("  movzb rax, al")
-        if node.op.type == TokenType.NE:
+        if node.kind == NodeKind.ND_NE:
             print("  cmp rax, rdi")
             print("  setne al")
             print("  movzb rax, al")
-        if node.op.type == TokenType.LT:
+        if node.kind == NodeKind.ND_LT:
             print("  cmp rax, rdi")
             print("  setl al")
             print("  movzb rax, al")
-        if node.op.type == TokenType.LE:
+        if node.kind == NodeKind.ND_LE:
             print("  cmp rax, rdi")
             print("  setle al")
             print("  movzb rax, al")
-        if node.op.type == TokenType.GT:
-            print("  cmp rax, rdi")
-            print("  setg al")
-            print("  movzb rdi, al")
-        if node.op.type == TokenType.GE:
-            print("  cmp rax, rdi")
-            print("  setge al")
-            print("  movzb rdi, al")
 
         print("  push rax")
 
