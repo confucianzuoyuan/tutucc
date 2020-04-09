@@ -1435,6 +1435,7 @@ def main():
             offset = 0
             # 局部变量是顺序进入数组的，所以需要逆序弹出算偏移量。
             for v in fn.locals:
+                offset = parser.align_to(offset, v.ty.align)
                 offset += v.ty.size
                 v.offset = offset
             fn.stack_size = parser.align_to(offset, 8)
