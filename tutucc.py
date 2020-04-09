@@ -69,13 +69,7 @@ class TokenType(Enum):
     ASSIGN        = '='
     EOF           = 'EOF'
     ADDR          = '&'
-    TYINT         = 'TYINT'
-    TYCHAR        = 'TYCHAR'
-    TYPTR         = 'TYPTR'
-    TYARRAY       = 'TYARRAY'
-    TYSTRUCT      = 'TYSTRUCT'
     STR           = 'STR'
-    MEMBER        = 'MEMBER'
 
 class Token:
     def __init__(self, type, value, lineno=None, column=None):
@@ -435,6 +429,13 @@ class NodeKind(Enum):
     ND_NUM       = auto() # Integer
     ND_NULL      = auto() # Empty statement
 
+class TypeKind(Enum):
+    TY_CHAR    = auto()
+    TY_INT     = auto()
+    TY_PTR     = auto()
+    TY_ARRAY   = auto()
+    TY_STRUCT  = auto()
+
 class Node:
     def __init__(self):
         self.kind     = None    # Node kind
@@ -497,20 +498,19 @@ class Type:
         self.kind = None
         self.base = None    # 指针或者数组
         self.size = 0       # sizeof()的值
+        self.align = 0
         self.array_len = 0
         self.members = []   # struct
 
-class IntType(Type):
-    def __init__(self):
-        self.kind = TokenType.TYINT
-        self.base = None
-        self.size = 8
+IntType = Type()
+IntType.kind = TypeKind.TY_INT
+IntType.size = 8
+IntType.align = 8
 
-class CharType(Type):
-    def __init__(self):
-        self.kind = TokenType.TYCHAR
-        self.base = None
-        self.size = 1
+CharType = Type()
+CharType.kind = TypeKind.TY_CHAR
+CharType.size = 1
+CharType.align = 1
 
 class Parser:
     """
@@ -910,7 +910,7 @@ class Parser:
         if token.type == TokenType.STR:
             self.current_token = self.get_next_token()
 
-            ty = self.array_of(CharType(), len(token.value))
+            ty = self.array_of(CharType, len(token.value))
             var = self.new_gvar(self.new_label(), ty)
             var.contents = token.value
             return self.new_var_node(var, token)
@@ -1045,7 +1045,7 @@ class Parser:
            node.kind == NodeKind.ND_LE or      \
            node.kind == NodeKind.ND_FUNCALL or \
            node.kind == NodeKind.ND_NUM:
-            node.ty = IntType()
+            node.ty = IntType
             return
 
         if node.kind == NodeKind.ND_PTR_ADD or \
@@ -1063,7 +1063,7 @@ class Parser:
             return
 
         if node.kind == NodeKind.ND_ADDR:
-            if node.lhs.ty.kind == TokenType.TYARRAY:
+            if node.lhs.ty.kind == TypeKind.TY_ARRAY:
                 node.ty = self.pointer_to(node.lhs.ty.base)
             else:
                 node.ty = self.pointer_to(node.lhs.ty)
@@ -1073,7 +1073,7 @@ class Parser:
             if node.lhs.ty.base is not None:
                 node.ty = node.lhs.ty.base
             else:
-                node.ty = IntType()
+                node.ty = IntType
             return
 
 
@@ -1082,21 +1082,24 @@ class Parser:
             return
 
     def is_integer(self, ty):
-        return ty.kind == TokenType.TYINT or ty.kind == TokenType.TYCHAR
+        return ty.kind == TypeKind.TY_INT or ty.kind == TypeKind.TY_CHAR
 
     def pointer_to(self, base):
-        ty = Type()
-        ty.kind = TokenType.TYPTR
-        ty.size = 8
+        ty = self.new_type(TypeKind.TY_PTR, 8, 8)
         ty.base = base
         return ty
 
     def array_of(self, base, len):
-        ty = Type()
-        ty.kind = TokenType.TYARRAY
-        ty.size = base.size * len
+        ty = self.new_type(TypeKind.TY_ARRAY, base.size * len, base.align)
         ty.base = base
         ty.array_len = len
+        return ty
+
+    def new_type(self, kind, size, align):
+        ty = Type()
+        ty.kind = kind
+        ty.size = size
+        ty.align = align
         return ty
 
     # basetype = ("char" | "int" | struct-decl) "*"*
@@ -1105,10 +1108,10 @@ class Parser:
             raise Exception('这里应该是一个类型名')
         if self.current_token.type == TokenType.CHAR:
             self.eat(TokenType.CHAR)
-            ty = CharType()
+            ty = CharType
         elif self.current_token.type == TokenType.INT:
             self.eat(TokenType.INT)
-            ty = IntType()
+            ty = IntType
         else:
             ty = self.struct_decl()
         while True:
@@ -1134,14 +1137,19 @@ class Parser:
                 members.append(self.struct_member())
 
         ty = Type()
-        ty.kind = TokenType.TYSTRUCT
+        ty.kind = TypeKind.TY_STRUCT
         ty.members = members
         
         offset = 0
         for m in ty.members:
+            offset = self.align_to(offset, m.ty.align)
             m.offset = offset
             offset += m.ty.size
-        ty.size = offset
+
+            if ty.align < m.ty.align:
+                ty.align = m.ty.align
+
+        ty.size = self.align_to(offset, ty.align)
 
         return ty
 
@@ -1163,7 +1171,7 @@ class Parser:
 
     def struct_ref(self, lhs):
         self.add_type(lhs)
-        if lhs.ty.kind != TokenType.TYSTRUCT:
+        if lhs.ty.kind != TypeKind.TY_STRUCT:
             raise Exception('不是一个结构体')
 
         tok = self.current_token
@@ -1200,7 +1208,7 @@ class Parser:
         )
 
     def gen_lvar(self, node):
-        if node.ty.kind == TokenType.TYARRAY:
+        if node.ty.kind == TypeKind.TY_ARRAY:
             raise Exception(node.token + '不是左值')
         self.gen_addr(node)
 
@@ -1254,7 +1262,7 @@ class Parser:
             return
         if node.kind == NodeKind.ND_VAR or node.kind == NodeKind.ND_MEMBER:
             self.gen_addr(node)
-            if node.ty.kind != TokenType.TYARRAY:
+            if node.ty.kind != TypeKind.TY_ARRAY:
                 self.load(node.ty)
             return
         if node.kind == NodeKind.ND_ASSIGN:
@@ -1267,7 +1275,7 @@ class Parser:
             return
         if node.kind == NodeKind.ND_DEREF:
             self.code_gen(node.lhs)
-            if node.ty.kind != TokenType.TYARRAY:
+            if node.ty.kind != TypeKind.TY_ARRAY:
                 self.load(node.ty)
             return
         if node.kind == NodeKind.ND_IF:
