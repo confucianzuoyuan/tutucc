@@ -465,6 +465,8 @@ class Node:
         self.var      = None      # Used if kind == ND_VAR
         self.val      = None      # Used if kind == ND_NUM
 
+        self.next     = None
+
 class Var:
     def __init__(self):
         self.name = None
@@ -476,22 +478,24 @@ class Var:
 class Function:
     def __init__(self):
         self.name = None
-        self.nodes = []
-        self.params = []
-        self.locals = []
+        self.node = None
+        self.params = None
+        self.locals = None
         self.stack_size = 0
         self.ty = None
+        self.next = None
 
 class Program:
     def __init__(self):
-        self.globals = []
-        self.fns = []
+        self.globals = None
+        self.fns = None
 
 class Member:
     def __init__(self):
         self.ty = None
         self.name = None
         self.offset = 0
+        self.next = None
 
 class Type:
     def __init__(self):
@@ -500,7 +504,23 @@ class Type:
         self.size = 0       # sizeof()的值
         self.align = 0
         self.array_len = 0
-        self.members = []   # struct
+        self.members = None   # struct
+
+class TagScope:
+    def __init__(self):
+        self.next = None
+        self.name = None
+        self.ty   = None
+
+class Scope:
+    def __init__(self):
+        self.var_scope = None
+        self.tag_scope = None
+
+class VarList:
+    def __init__(self):
+        self.var  = None
+        self.next = None
 
 IntType = Type()
 IntType.kind = TypeKind.TY_INT
@@ -528,19 +548,48 @@ class Parser:
     def __init__(self, tokens):
         # set current token to the first token taken from the input
         self.current_token_index = 0
-        self.locals = []
-        self.globals = []
-        self.scope = []
+        self.locals = None
+        self.globals = None
+        self.var_scope = None
+        self.tag_scope = None
         self.labelseq = 1
         self.funcname = None
         self.tokens = tokens
         self.current_token = self.tokens[self.current_token_index]
         self.cnt = 0
 
+    def enter_scope(self):
+        sc = Scope()
+        sc.var_scope = self.var_scope
+        sc.tag_scope = self.tag_scope
+        return sc
+
+    def leave_scope(self, sc):
+        self.var_scope = sc.var_scope
+        self.tag_scope = sc.tag_scope
+
+    def push_tag_scope(self, token, ty):
+        sc = TagScope()
+        sc.next = self.tag_scope
+        sc.name = token.value
+        sc.ty   = ty
+        self.tag_scope = sc
+
+    def find_tag(self, token):
+        sc = self.tag_scope
+        while sc is not None:
+            if sc.name == token.value:
+                return sc
+            sc = sc.next
+        return None
+
     def find_var(self, token):
-        for v in self.scope:
-            if v.name == token.value:
-                return v
+        vl = self.var_scope
+        while vl is not None:
+            var = vl.var
+            if var.name == token.value:
+                return var
+            vl = vl.next
         return None
 
     def new_node(self, kind, tok):
@@ -603,7 +652,12 @@ class Parser:
 
     def new_gvar(self, name, ty):
         var = self.new_var(name, ty, False)
-        self.globals.insert(0, var)
+
+        vl = VarList()
+        vl.var = var
+        vl.next = self.globals
+        self.globals = vl
+
         return var
 
     def new_var(self, name, ty, is_local):
@@ -612,25 +666,33 @@ class Parser:
         var.ty = ty
         var.is_local = is_local
 
-        self.scope.insert(0, var)
+        sc = VarList()
+        sc.var = var
+        sc.next = self.var_scope
+        self.var_scope = sc
         return var
 
     def new_lvar(self, name, ty):
         var = self.new_var(name, ty, True)
-        self.locals.insert(0, var)
+
+        vl = VarList()
+        vl.var = var
+        vl.next = self.locals
+        self.locals = vl
 
         return var
 
     def consume_ident(self):
-        if self.current_token.type != TokenType.ID:
-            return False
+        token = self.current_token
+        if token.type != TokenType.ID:
+            return None
         self.eat(TokenType.ID)
-        return True
+        return token
         
     def is_function(self):
         idx = self.current_token_index
         self.basetype()
-        isfunc = self.consume_ident() and self.consume(TokenType.LPAREN)
+        isfunc = self.consume_ident() is not None and self.consume(TokenType.LPAREN)
         self.current_token_index = idx
         self.current_token = self.tokens[self.current_token_index]
         return isfunc
@@ -647,54 +709,66 @@ class Parser:
     # stmt-expr = "(" "{" stmt stmt* "}" ")"
     # Statement expression is a GNU C extension.
     def stmt_expr(self, tok):
+        sc = self.enter_scope()
         node = self.new_node(NodeKind.ND_STMT_EXPR, tok)
-        node.body = [self.stmt()]
+        node.body = self.stmt()
+        cur = node.body
         while True:
             if self.consume(TokenType.RBRACE):
                 break
             else:
-                node.body.append(self.stmt())
+                cur.next = self.stmt()
+                cur = cur.next
         self.eat(TokenType.RPAREN)
-        node.body[-1] = node.body[-1].lhs
+        self.leave_scope(sc)
+        # 将cur指向的节点，替换为cur.lhs指向的节点
+        tmp = node.body
+        while tmp.next != cur:
+            tmp = tmp.next
+        tmp.next = cur.lhs
         return node
 
     # program = (global-var | function)*
     def program(self):
-        function_list = []
-        self.globals = []
+        head = Function()
+        cur = head
+        self.globals = None
         while self.current_token.type != TokenType.EOF:
             if self.is_function():
-                function_list.append(self.function())
+                cur.next = self.function()
+                cur = cur.next
             else:
                 self.global_var()
 
         prog = Program()
-        prog.fns = function_list
         prog.globals = self.globals
+        prog.fns = head.next
         return prog
 
     def function(self):
-        self.locals = []
+        self.locals = None
         fn = Function()
         self.basetype()
         if self.current_token.type == TokenType.ID:
             fn.name = self.current_token.value
             self.eat(TokenType.ID)
         self.eat(TokenType.LPAREN)
-        sc = self.scope[:]
+        sc = self.enter_scope()
         fn.params = self.read_func_params()
         self.eat(TokenType.LBRACE)
 
-        stmts = []
+        head = Node()
+        cur = head
 
         while True:
             try:
                 self.eat(TokenType.RBRACE)
                 break
             except:
-                stmts.append(self.stmt())
-        self.scope = sc[:]
-        fn.nodes = stmts
+                cur.next = self.stmt()
+                cur = cur.next
+        self.leave_scope(sc)
+        fn.node = head.next
         fn.locals = self.locals
         return fn
 
@@ -702,6 +776,8 @@ class Parser:
     def declaration(self):
         token = self.current_token
         ty = self.basetype()
+        if self.consume(TokenType.SEMI):
+            return self.new_node(NodeKind.ND_NULL, token)
         name = self.current_token.value
         self.eat(TokenType.ID)
         ty = self.read_type_suffix(ty)
@@ -764,19 +840,21 @@ class Parser:
             return node
 
         if self.consume(TokenType.LBRACE):
-            stmt_list = []
+            head = Node()
+            cur = head
 
-            sc = self.scope[:]
+            sc = self.enter_scope()
             while True:
                 try:
                     self.eat(TokenType.RBRACE)
                     break
                 except:
-                    stmt_list.append(self.stmt())
-            self.scope = sc[:]
+                    cur.next = self.stmt()
+                    cur = cur.next
+            self.leave_scope(sc)
 
             node = self.new_node(NodeKind.ND_BLOCK, token)
-            node.body = stmt_list
+            node.body = head.next
             return node
 
         if self.is_typename():
@@ -945,15 +1023,17 @@ class Parser:
 
     def func_args(self):
         if self.consume(TokenType.RPAREN):
-            return []
-        args_list = [self.assign()]
+            return None
+        head = self.assign()
+        cur = head
         while True:
             if self.consume(TokenType.COMMA):
-                args_list.append(self.assign())
+                cur.next = self.assign()
+                cur = cur.next
             else:
                 break
         self.eat(TokenType.RPAREN)
-        return args_list
+        return head
 
     def read_type_suffix(self, base):
         if self.current_token.type != TokenType.LBRACKET:
@@ -970,16 +1050,16 @@ class Parser:
         name = self.current_token.value
         self.eat(TokenType.ID)
         ty = self.read_type_suffix(ty)
-        var = self.new_lvar(name, ty)
-        return var
+        vl = VarList()
+        vl.var = self.new_lvar(name, ty)
+        return vl
 
     def read_func_params(self):
         if self.consume(TokenType.RPAREN):
-            return []
+            return None
         
-        var_list = []
-        v = self.read_func_param()
-        var_list.append(v)
+        head = self.read_func_param()
+        cur = head
 
         while True:
             try:
@@ -987,10 +1067,10 @@ class Parser:
                 break
             except:
                 self.eat(TokenType.COMMA)
-                v = self.read_func_param()
-                var_list.append(v)
+                cur.next = self.read_func_param()
+                cur = cur.next
         
-        return var_list
+        return head
 
     def new_add(self, lhs, rhs, token):
         self.add_type(lhs)
@@ -1027,12 +1107,14 @@ class Parser:
         self.add_type(node.init)
         self.add_type(node.inc)
 
-        if node.body:
-            for n in node.body:
-                self.add_type(n)
-        if node.args:
-            for n in node.args:
-                self.add_type(n)
+        n = node.body
+        while n is not None:
+            self.add_type(n)
+            n = n.next
+        n = node.args
+        while n is not None:
+            self.add_type(n)
+            n = n.next
 
         if node.kind == NodeKind.ND_ADD or    \
            node.kind == NodeKind.ND_SUB or   \
@@ -1078,7 +1160,10 @@ class Parser:
 
 
         if node.kind == NodeKind.ND_STMT_EXPR:
-            node.ty = node.body[-1].ty
+            last = node.body
+            while last.next is not None:
+                last = last.next
+            node.ty = last.ty
             return
 
     def is_integer(self, ty):
@@ -1123,33 +1208,48 @@ class Parser:
 
         return ty
 
-    # struct-decl = "struct" "{" struct-member "}"
+    # struct-decl = "struct" ident
+    #             | "struct" ident? "{" struct-member "}"
     def struct_decl(self):
         self.eat(TokenType.STRUCT)
+        tag = self.consume_ident()
+        if tag is not None and self.current_token.type != TokenType.LBRACE:
+            sc = self.find_tag(tag)
+            if sc is None:
+                raise Exception("未知结构体类型")
+            return sc.ty
         self.eat(TokenType.LBRACE)
 
-        members = []
+        head = Member()
+        cur = head
         while True:
             try:
                 self.eat(TokenType.RBRACE)
                 break
             except:
-                members.append(self.struct_member())
+                cur.next = self.struct_member()
+                cur = cur.next
 
         ty = Type()
         ty.kind = TypeKind.TY_STRUCT
-        ty.members = members
+        ty.members = head.next
         
         offset = 0
-        for m in ty.members:
-            offset = self.align_to(offset, m.ty.align)
-            m.offset = offset
-            offset += m.ty.size
+        mem = ty.members
+        while mem is not None:
+            offset = self.align_to(offset, mem.ty.align)
+            mem.offset = offset
+            offset += mem.ty.size
 
-            if ty.align < m.ty.align:
-                ty.align = m.ty.align
+            if ty.align < mem.ty.align:
+                ty.align = mem.ty.align
+
+            mem = mem.next
 
         ty.size = self.align_to(offset, ty.align)
+
+        if tag is not None:
+            self.push_tag_scope(tag, ty)
 
         return ty
 
@@ -1164,9 +1264,11 @@ class Parser:
         return mem
 
     def find_member(self, ty, name):
-        for mem in ty.members:
+        mem = ty.members
+        while mem is not None:
             if mem.name == name:
                 return mem
+            mem = mem.next
         return None
 
     def struct_ref(self, lhs):
@@ -1239,13 +1341,17 @@ class Parser:
 
     def emit_data(self, prog):
         print(".data")
-        for var in prog.globals:
+        vl = prog.globals
+        while vl is not None:
+            var = vl.var
             print("%s:" % var.name)
             if not var.contents:
                 print("  .zero %d" % var.ty.size)
+                vl = vl.next
                 continue
             for c in var.contents:
                 print("  .byte %d" % ord(c))
+            vl = vl.next
 
     def align_to(self, n, align):
         return (n + align - 1) & ~(align - 1)
@@ -1329,20 +1435,26 @@ class Parser:
             print(".L.end.%d:" % seq)
             return
         if node.kind == NodeKind.ND_BLOCK or node.kind == NodeKind.ND_STMT_EXPR:
-            for n in node.body:
+            n = node.body
+            while n is not None:
                 self.code_gen(n)
+                n = n.next
             return
         if node.kind == NodeKind.ND_FUNCALL:
-            for arg in node.args:
+            nargs = 0
+            arg = node.args
+            while arg is not None:
                 self.code_gen(arg)
-            for i in range(len(node.args)-1, -1, -1):
+                nargs = nargs + 1
+                arg = arg.next
+            for i in range(nargs-1, -1, -1):
                 print("  pop %s" % argreg8[i])
             # 函数调用前，必须将 RSP 对齐到 16 字节的边界
             # 这是 ABI 的要求
             seq = self.labelseq
             self.labelseq += 1
             print("  mov rax, rsp")
-            print("  and rax, 15")
+            print("  and rax, 15") # 将rax寄存器填满，也就是对齐操作
             print("  jnz .L.call.%d" % seq)
             print("  mov rax, 0")
             print("  call %s" % node.funcname)
@@ -1431,18 +1543,24 @@ def main():
     try:
         parser = Parser(tokens)
         prog = parser.parse()
-        for fn in prog.fns:
+        fn = prog.fns
+        while fn is not None:
             offset = 0
             # 局部变量是顺序进入数组的，所以需要逆序弹出算偏移量。
-            for v in fn.locals:
-                offset = parser.align_to(offset, v.ty.align)
-                offset += v.ty.size
-                v.offset = offset
+            vl = fn.locals
+            while vl is not None:
+                var = vl.var
+                offset = parser.align_to(offset, var.ty.align)
+                offset += var.ty.size
+                var.offset = offset
+                vl = vl.next
             fn.stack_size = parser.align_to(offset, 8)
+            fn = fn.next
         print(".intel_syntax noprefix")
         parser.emit_data(prog)
         print(".text")
-        for fn in prog.fns:
+        fn = prog.fns
+        while fn is not None:
             print(".global %s" % fn.name)
             print("%s:" % fn.name)
             parser.funcname = fn.name
@@ -1451,15 +1569,22 @@ def main():
             print("  mov rbp, rsp")
             print("  sub rsp, %d" % fn.stack_size)
 
-            for i in range(len(fn.params)):
-                parser.load_arg(fn.params[i], i)
+            i = 0
+            vl = fn.params
+            while vl is not None:
+                parser.load_arg(vl.var, i)
+                i = i + 1
+                vl = vl.next
 
-            for n in fn.nodes:
-                parser.code_gen(n)
+            node = fn.node
+            while node is not None:
+                parser.code_gen(node)
+                node = node.next
             print(".L.return.%s:" % parser.funcname)
             print("  mov rsp, rbp")
             print("  pop rbp")
             print("  ret")
+            fn = fn.next
         sys.exit(0)
     except (LexerError, ParserError) as e:
         print(e.message)
