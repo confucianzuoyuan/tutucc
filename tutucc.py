@@ -3,6 +3,7 @@ import sys
 from enum import Enum, auto
 
 argreg1 = ["dil", "sil", "dl", "cl", "r8b", "r9b"]
+argreg4 = ["edi", "esi", "edx", "ecx", "r8d", "r9d"]
 argreg8 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 
 class ErrorCode(Enum):
@@ -547,8 +548,8 @@ class VarList:
 
 IntType = Type()
 IntType.kind = TypeKind.TY_INT
-IntType.size = 8
-IntType.align = 8
+IntType.size = 4
+IntType.align = 4
 
 CharType = Type()
 CharType.kind = TypeKind.TY_CHAR
@@ -1371,7 +1372,10 @@ class Parser:
         print("  pop rax")
         if ty.size == 1:
             print("  movsx rax, byte ptr [rax]")
+        elif ty.size == 4:
+            print("  movsxd rax, dword ptr [rax]")
         else:
+            assert ty.size == 8
             print("  mov rax, [rax]")
         print("  push rax")
 
@@ -1380,7 +1384,10 @@ class Parser:
         print("  pop rax")
         if ty.size == 1:
             print("  mov [rax], dil")
+        elif ty.size == 4:
+            print("  mov [rax], edi")
         else:
+            assert ty.size == 8
             print("  mov [rax], rdi")
         print("  push rdi")
 
@@ -1388,6 +1395,8 @@ class Parser:
         sz = var.ty.size
         if sz == 1:
             print("  mov [rbp-%d], %s" % (var.offset, argreg1[idx]))
+        elif sz == 4:
+            print("  mov [rbp-%d], %s" % (var.offset, argreg4[idx]))
         else:
             assert sz == 8
             print("  mov [rbp-%d], %s" % (var.offset, argreg8[idx]))
