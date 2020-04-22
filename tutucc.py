@@ -62,6 +62,7 @@ class TokenType(Enum):
     NULL          = 'NULL'
     SIZEOF        = 'SIZEOF'
     STRUCT        = 'STRUCT'
+    TYPEDEF       = 'TYPEDEF'
     RETURN        = 'RETURN'
     # misc
     ID            = 'ID'
@@ -519,11 +520,20 @@ class Type:
         self.array_len = 0
         self.members = None   # struct
 
+# C has two block scopes; one is for variables/typedefs and
+# the other is for struct tags.
 class TagScope:
     def __init__(self):
         self.next = None
         self.name = None
         self.ty   = None
+
+class VarScope:
+    def __init__(self):
+        self.var = None
+        self.next = None
+        self.name = None
+        self.type_def = None
 
 class Scope:
     def __init__(self):
@@ -581,6 +591,13 @@ class Parser:
         self.var_scope = sc.var_scope
         self.tag_scope = sc.tag_scope
 
+    def push_scope(self, name):
+        sc = VarScope()
+        sc.name = name
+        sc.next = self.var_scope
+        self.var_scope = sc
+        return sc
+
     def push_tag_scope(self, token, ty):
         sc = TagScope()
         sc.next = self.tag_scope
@@ -597,12 +614,18 @@ class Parser:
         return None
 
     def find_var(self, token):
-        vl = self.var_scope
-        while vl is not None:
-            var = vl.var
-            if var.name == token.value:
-                return var
-            vl = vl.next
+        sc = self.var_scope
+        while sc is not None:
+            if sc.name == token.value:
+                return sc
+            sc = sc.next
+        return None
+
+    def find_typedef(self, token):
+        if token.type == TokenType.ID:
+            sc = self.find_var(token)
+            if sc:
+                return sc.type_def
         return None
 
     def new_node(self, kind, tok):
@@ -665,6 +688,7 @@ class Parser:
 
     def new_gvar(self, name, ty):
         var = self.new_var(name, ty, False)
+        self.push_scope(name).var = var
 
         vl = VarList()
         vl.var = var
@@ -679,14 +703,11 @@ class Parser:
         var.ty = ty
         var.is_local = is_local
 
-        sc = VarList()
-        sc.var = var
-        sc.next = self.var_scope
-        self.var_scope = sc
         return var
 
     def new_lvar(self, name, ty):
         var = self.new_var(name, ty, True)
+        self.push_scope(name).var = var
 
         vl = VarList()
         vl.var = var
@@ -870,6 +891,15 @@ class Parser:
             node.body = head.next
             return node
 
+        if self.consume(TokenType.TYPEDEF):
+            ty = self.basetype()
+            name = self.current_token
+            self.eat(TokenType.ID)
+            ty = self.read_type_suffix(ty)
+            self.eat(TokenType.SEMI)
+            self.push_scope(name).type_def = ty
+            return self.new_node(NodeKind.ND_NULL, token)
+
         if self.is_typename():
             return self.declaration()
 
@@ -880,7 +910,8 @@ class Parser:
     def is_typename(self):
         return self.current_token.type == TokenType.INT or \
         self.current_token.type == TokenType.CHAR or \
-        self.current_token.type == TokenType.STRUCT
+        self.current_token.type == TokenType.STRUCT or \
+        self.find_typedef(self.current_token)
 
     def expr(self):
         return self.assign()
@@ -999,10 +1030,10 @@ class Parser:
                 return node
 
             # 查找变量
-            var = self.find_var(token)
-            if var is None:
-                raise Exception("没有找到变量")
-            return self.new_var_node(var, token)
+            sc = self.find_var(token)
+            if sc and sc.var:
+                return self.new_var_node(sc.var, token)
+            raise Exception("没有找到变量")
 
         if token.type == TokenType.STR:
             self.current_token = self.get_next_token()
@@ -1206,7 +1237,7 @@ class Parser:
         ty.align = align
         return ty
 
-    # basetype = ("char" | "int" | struct-decl) "*"*
+    # basetype = ("char" | "int" | struct-decl | typedef-name) "*"*
     def basetype(self):
         if self.is_typename() is False:
             raise Exception('这里应该是一个类型名')
@@ -1216,8 +1247,11 @@ class Parser:
         elif self.current_token.type == TokenType.INT:
             self.eat(TokenType.INT)
             ty = IntType
-        else:
+        elif self.current_token.type == TokenType.STRUCT:
             ty = self.struct_decl()
+        else:
+            ty = self.find_var(self.consume_ident()).type_def
+        assert ty is not None
         while True:
             try:
                 self.eat(TokenType.MUL)
