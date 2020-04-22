@@ -893,7 +893,7 @@ class Parser:
 
         if self.consume(TokenType.TYPEDEF):
             ty = self.basetype()
-            name = self.current_token
+            name = self.current_token.value
             self.eat(TokenType.ID)
             ty = self.read_type_suffix(ty)
             self.eat(TokenType.SEMI)
