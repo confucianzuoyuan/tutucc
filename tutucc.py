@@ -51,6 +51,7 @@ class TokenType(Enum):
     GE            = '>='
     NE            = '!='
     EQ            = '=='
+    ARROW         = '->'
     # block of reserved words
     INT           = 'INT'
     CHAR          = 'CHAR'
@@ -272,6 +273,18 @@ class Lexer:
         apart into tokens. One token at a time.
         """
         while self.current_char is not None:
+            if self.current_char == '-':
+                if self.peek() == '>':
+                    token = Token(
+                        type=TokenType.ARROW,
+                        value='->',
+                        lineno=self.lineno,
+                        column=self.column,
+                    )
+                    self.advance()
+                    self.advance()
+                    return token
+
             if self.current_char == '/':
                 if self.peek() == '/':
                     self.advance()
@@ -945,6 +958,12 @@ class Parser:
                 continue
 
             if self.consume(TokenType.DOT):
+                node = self.struct_ref(node)
+                continue
+
+            token = self.current_token
+            if self.consume(TokenType.ARROW):
+                node = self.new_unary(NodeKind.ND_DEREF, node, token)
                 node = self.struct_ref(node)
                 continue
 
