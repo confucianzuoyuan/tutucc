@@ -3,6 +3,7 @@ import sys
 from enum import Enum, auto
 
 argreg1 = ["dil", "sil", "dl", "cl", "r8b", "r9b"]
+argreg2 = ["di", "si", "dx", "cx", "r8w", "r9w"]
 argreg4 = ["edi", "esi", "edx", "ecx", "r8d", "r9d"]
 argreg8 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 
@@ -56,6 +57,8 @@ class TokenType(Enum):
     # block of reserved words
     INT           = 'INT'
     CHAR          = 'CHAR'
+    SHORT         = 'SHORT'
+    LONG          = 'LONG'
     IF            = 'IF'
     ELSE          = 'ELSE'
     WHILE         = 'WHILE'
@@ -447,6 +450,8 @@ class NodeKind(Enum):
 class TypeKind(Enum):
     TY_CHAR    = auto()
     TY_INT     = auto()
+    TY_SHORT   = auto()
+    TY_LONG    = auto()
     TY_PTR     = auto()
     TY_ARRAY   = auto()
     TY_STRUCT  = auto()
@@ -550,6 +555,16 @@ IntType = Type()
 IntType.kind = TypeKind.TY_INT
 IntType.size = 4
 IntType.align = 4
+
+ShortType = Type()
+ShortType.kind = TypeKind.TY_SHORT
+ShortType.size = 2
+ShortType.align = 2
+
+LongType = Type()
+LongType.kind = TypeKind.TY_LONG
+LongType.size = 8
+LongType.align = 8
 
 CharType = Type()
 CharType.kind = TypeKind.TY_CHAR
@@ -795,13 +810,9 @@ class Parser:
         head = Node()
         cur = head
 
-        while True:
-            try:
-                self.eat(TokenType.RBRACE)
-                break
-            except:
-                cur.next = self.stmt()
-                cur = cur.next
+        while not self.consume(TokenType.RBRACE):
+            cur.next = self.stmt()
+            cur = cur.next
         self.leave_scope(sc)
         fn.node = head.next
         fn.locals = self.locals
@@ -879,13 +890,9 @@ class Parser:
             cur = head
 
             sc = self.enter_scope()
-            while True:
-                try:
-                    self.eat(TokenType.RBRACE)
-                    break
-                except:
-                    cur.next = self.stmt()
-                    cur = cur.next
+            while not self.consume(TokenType.RBRACE):
+                cur.next = self.stmt()
+                cur = cur.next
             self.leave_scope(sc)
 
             node = self.new_node(NodeKind.ND_BLOCK, token)
@@ -910,9 +917,11 @@ class Parser:
 
     def is_typename(self):
         return self.current_token.type == TokenType.INT or \
-        self.current_token.type == TokenType.CHAR or \
-        self.current_token.type == TokenType.STRUCT or \
-        self.find_typedef(self.current_token)
+            self.current_token.type == TokenType.SHORT or \
+            self.current_token.type == TokenType.LONG or \
+            self.current_token.type == TokenType.CHAR or \
+            self.current_token.type == TokenType.STRUCT or \
+            self.find_typedef(self.current_token)
 
     def expr(self):
         return self.assign()
@@ -1112,14 +1121,10 @@ class Parser:
         head = self.read_func_param()
         cur = head
 
-        while True:
-            try:
-                self.eat(TokenType.RPAREN)
-                break
-            except:
-                self.eat(TokenType.COMMA)
-                cur.next = self.read_func_param()
-                cur = cur.next
+        while not self.consume(TokenType.RPAREN):
+            self.eat(TokenType.COMMA)
+            cur.next = self.read_func_param()
+            cur = cur.next
         
         return head
 
@@ -1178,7 +1183,7 @@ class Parser:
            node.kind == NodeKind.ND_LE or      \
            node.kind == NodeKind.ND_FUNCALL or \
            node.kind == NodeKind.ND_NUM:
-            node.ty = IntType
+            node.ty = LongType
             return
 
         if node.kind == NodeKind.ND_PTR_ADD or \
@@ -1218,7 +1223,10 @@ class Parser:
             return
 
     def is_integer(self, ty):
-        return ty.kind == TypeKind.TY_INT or ty.kind == TypeKind.TY_CHAR
+        return ty.kind == TypeKind.TY_INT or \
+            ty.kind == TypeKind.TY_CHAR or \
+            ty.kind == TypeKind.TY_SHORT or \
+            ty.kind == TypeKind.TY_LONG
 
     def pointer_to(self, base):
         ty = self.new_type(TypeKind.TY_PTR, 8, 8)
@@ -1242,23 +1250,21 @@ class Parser:
     def basetype(self):
         if self.is_typename() is False:
             raise Exception('这里应该是一个类型名')
-        if self.current_token.type == TokenType.CHAR:
-            self.eat(TokenType.CHAR)
+        if self.consume(TokenType.CHAR):
             ty = CharType
-        elif self.current_token.type == TokenType.INT:
-            self.eat(TokenType.INT)
+        elif self.consume(TokenType.SHORT):
+            ty = ShortType
+        elif self.consume(TokenType.INT):
             ty = IntType
+        elif self.consume(TokenType.LONG):
+            ty = LongType
         elif self.current_token.type == TokenType.STRUCT:
             ty = self.struct_decl()
         else:
             ty = self.find_var(self.consume_ident()).type_def
         assert ty is not None
-        while True:
-            try:
-                self.eat(TokenType.MUL)
-                ty = self.pointer_to(ty)
-            except:
-                break
+        while self.consume(TokenType.MUL):
+            ty = self.pointer_to(ty)
 
         return ty
 
@@ -1276,13 +1282,9 @@ class Parser:
 
         head = Member()
         cur = head
-        while True:
-            try:
-                self.eat(TokenType.RBRACE)
-                break
-            except:
-                cur.next = self.struct_member()
-                cur = cur.next
+        while not self.consume(TokenType.RBRACE):
+            cur.next = self.struct_member()
+            cur = cur.next
 
         ty = Type()
         ty.kind = TypeKind.TY_STRUCT
@@ -1372,6 +1374,8 @@ class Parser:
         print("  pop rax")
         if ty.size == 1:
             print("  movsx rax, byte ptr [rax]")
+        elif ty.size == 2:
+            print("  movsx rax, word ptr [rax]")
         elif ty.size == 4:
             print("  movsxd rax, dword ptr [rax]")
         else:
@@ -1384,6 +1388,8 @@ class Parser:
         print("  pop rax")
         if ty.size == 1:
             print("  mov [rax], dil")
+        elif ty.size == 2:
+            print("  mov [rax], di")
         elif ty.size == 4:
             print("  mov [rax], edi")
         else:
@@ -1395,6 +1401,8 @@ class Parser:
         sz = var.ty.size
         if sz == 1:
             print("  mov [rbp-%d], %s" % (var.offset, argreg1[idx]))
+        elif sz == 2:
+            print("  mov [rbp-%d], %s" % (var.offset, argreg2[idx]))
         elif sz == 4:
             print("  mov [rbp-%d], %s" % (var.offset, argreg4[idx]))
         else:
