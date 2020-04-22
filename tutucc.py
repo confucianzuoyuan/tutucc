@@ -741,8 +741,10 @@ class Parser:
         
     def is_function(self):
         idx = self.current_token_index
-        self.basetype()
-        isfunc = self.consume_ident() is not None and self.consume(TokenType.LPAREN)
+        ty = self.basetype()
+        name = None
+        _, name = self.declarator(ty, name)
+        isfunc = name and self.consume(TokenType.LPAREN)
         self.current_token_index = idx
         self.current_token = self.tokens[self.current_token_index]
         return isfunc
@@ -750,9 +752,9 @@ class Parser:
     # global-var = basetype ident ("[" num "]")* ";"
     def global_var(self):
         ty = self.basetype()
-        name = self.current_token.value
-        self.eat(TokenType.ID)
-        ty = self.read_type_suffix(ty)
+        name = None
+        ty, name = self.declarator(ty, name)
+        ty = self.type_suffix(ty)
         self.eat(TokenType.SEMI)
         self.new_gvar(name, ty)
 
@@ -763,19 +765,13 @@ class Parser:
         node = self.new_node(NodeKind.ND_STMT_EXPR, tok)
         node.body = self.stmt()
         cur = node.body
-        while True:
-            if self.consume(TokenType.RBRACE):
-                break
-            else:
-                cur.next = self.stmt()
-                cur = cur.next
+        while not self.consume(TokenType.RBRACE):
+            cur.next = self.stmt()
+            cur = cur.next
         self.eat(TokenType.RPAREN)
         self.leave_scope(sc)
         # 将cur指向的节点，替换为cur.lhs指向的节点
-        tmp = node.body
-        while tmp.next != cur:
-            tmp = tmp.next
-        tmp.next = cur.lhs
+        cur.__dict__.update(cur.lhs.__dict__)
         return node
 
     # program = (global-var | function)*
@@ -797,11 +793,12 @@ class Parser:
 
     def function(self):
         self.locals = None
+        ty = self.basetype()
+        name = None
+        _, name = self.declarator(ty, name)
         fn = Function()
-        self.basetype()
-        if self.current_token.type == TokenType.ID:
-            fn.name = self.current_token.value
-            self.eat(TokenType.ID)
+        fn.name = name
+
         self.eat(TokenType.LPAREN)
         sc = self.enter_scope()
         fn.params = self.read_func_params()
@@ -824,9 +821,9 @@ class Parser:
         ty = self.basetype()
         if self.consume(TokenType.SEMI):
             return self.new_node(NodeKind.ND_NULL, token)
-        name = self.current_token.value
-        self.eat(TokenType.ID)
-        ty = self.read_type_suffix(ty)
+        name = None
+        ty, name = self.declarator(ty, name)
+        ty = self.type_suffix(ty)
         var = self.new_lvar(name, ty)
 
         if self.consume(TokenType.SEMI):
@@ -901,9 +898,9 @@ class Parser:
 
         if self.consume(TokenType.TYPEDEF):
             ty = self.basetype()
-            name = self.current_token.value
-            self.eat(TokenType.ID)
-            ty = self.read_type_suffix(ty)
+            name = None
+            ty, name = self.declarator(ty, name)
+            ty = self.type_suffix(ty)
             self.eat(TokenType.SEMI)
             self.push_scope(name).type_def = ty
             return self.new_node(NodeKind.ND_NULL, token)
@@ -990,9 +987,9 @@ class Parser:
         node = self.primary()
 
         while True:
+            token = self.current_token
             if self.consume(TokenType.LBRACKET):
                 # x[y] 是 *(x+y) 的语法糖
-                token = self.current_token
                 expr = self.new_add(node, self.expr(), token)
                 self.eat(TokenType.RBRACKET)
                 node = self.new_unary(NodeKind.ND_DEREF, expr, token)
@@ -1002,7 +999,6 @@ class Parser:
                 node = self.struct_ref(node)
                 continue
 
-            token = self.current_token
             if self.consume(TokenType.ARROW):
                 node = self.new_unary(NodeKind.ND_DEREF, node, token)
                 node = self.struct_ref(node)
@@ -1095,21 +1091,11 @@ class Parser:
         self.eat(TokenType.RPAREN)
         return head
 
-    def read_type_suffix(self, base):
-        if self.current_token.type != TokenType.LBRACKET:
-            return base
-        self.eat(TokenType.LBRACKET)
-        sz = self.current_token.value
-        self.current_token = self.get_next_token()
-        self.eat(TokenType.RBRACKET)
-        base = self.read_type_suffix(base)
-        return self.array_of(base, sz)
-
     def read_func_param(self):
         ty = self.basetype()
-        name = self.current_token.value
-        self.eat(TokenType.ID)
-        ty = self.read_type_suffix(ty)
+        name = None
+        ty, name = self.declarator(ty, name)
+        ty = self.type_suffix(ty)
         vl = VarList()
         vl.var = self.new_lvar(name, ty)
         return vl
@@ -1251,22 +1237,46 @@ class Parser:
         if self.is_typename() is False:
             raise Exception('这里应该是一个类型名')
         if self.consume(TokenType.CHAR):
-            ty = CharType
+            return CharType
         elif self.consume(TokenType.SHORT):
-            ty = ShortType
+            return ShortType
         elif self.consume(TokenType.INT):
-            ty = IntType
+            return IntType
         elif self.consume(TokenType.LONG):
-            ty = LongType
+            return LongType
         elif self.current_token.type == TokenType.STRUCT:
-            ty = self.struct_decl()
-        else:
-            ty = self.find_var(self.consume_ident()).type_def
-        assert ty is not None
+            return self.struct_decl()
+        return self.find_var(self.consume_ident()).type_def
+
+    def declarator(self, ty, name):
         while self.consume(TokenType.MUL):
             ty = self.pointer_to(ty)
 
-        return ty
+        if self.consume(TokenType.LPAREN):
+            placeholder = Type()
+            new_ty, name = self.declarator(placeholder, name)
+            self.eat(TokenType.RPAREN)
+            # 将一个对象的所有属性拷贝到另一个对象，黑魔法，为了不改变placeholder的地址
+            placeholder.__dict__.update(self.type_suffix(ty).__dict__)
+            return (new_ty, name)
+        
+        name = self.expect_ident()
+        return (self.type_suffix(ty), name)
+
+    def expect_ident(self):
+        if self.current_token.type != TokenType.ID:
+            raise("应该是一个标识符！")
+        s = self.current_token.value
+        self.current_token = self.get_next_token()
+        return s
+
+    def type_suffix(self, ty):
+        if not self.consume(TokenType.LBRACKET):
+            return ty
+        sz = self.expect_number()
+        self.eat(TokenType.RBRACKET)
+        ty = self.type_suffix(ty)
+        return self.array_of(ty, sz)
 
     # struct-decl = "struct" ident
     #             | "struct" ident? "{" struct-member "}"
@@ -1311,12 +1321,14 @@ class Parser:
 
     # struct-member = basetype ident ("[" num "]")* ";"
     def struct_member(self):
-        mem = Member()
-        mem.ty = self.basetype()
-        mem.name = self.current_token.value
-        self.eat(TokenType.ID)
-        mem.ty = self.read_type_suffix(mem.ty)
+        ty = self.basetype()
+        name = None
+        ty, name = self.declarator(ty, name)
+        ty = self.type_suffix(ty)
         self.eat(TokenType.SEMI)
+        mem = Member()
+        mem.name = name
+        mem.ty = ty
         return mem
 
     def find_member(self, ty, name):
