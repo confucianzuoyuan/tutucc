@@ -59,6 +59,7 @@ class TokenType(Enum):
     CHAR          = 'CHAR'
     SHORT         = 'SHORT'
     LONG          = 'LONG'
+    VOID          = 'VOID'
     IF            = 'IF'
     ELSE          = 'ELSE'
     WHILE         = 'WHILE'
@@ -174,7 +175,7 @@ class Lexer:
             return self.text[peek_pos]
 
     def skip_whitespace(self):
-        while self.current_char is not None and self.current_char.isspace():
+        while self.current_char and self.current_char.isspace():
             self.advance()
 
     def number(self):
@@ -184,7 +185,7 @@ class Lexer:
         token = Token(type=None, value=None, lineno=self.lineno, column=self.column)
 
         result = ''
-        while self.current_char is not None and self.current_char.isdigit():
+        while self.current_char and self.current_char.isdigit():
             result += self.current_char
             self.advance()
 
@@ -192,7 +193,7 @@ class Lexer:
             result += self.current_char
             self.advance()
 
-            while self.current_char is not None and self.current_char.isdigit():
+            while self.current_char and self.current_char.isdigit():
                 result += self.current_char
                 self.advance()
 
@@ -211,12 +212,12 @@ class Lexer:
         token = Token(type=None, value=None, lineno=self.lineno, column=self.column)
 
         value = ''
-        while self.current_char is not None and (self.current_char.isalnum() or self.current_char == '_'):
+        while self.current_char and (self.current_char.isalnum() or self.current_char == '_'):
             value += self.current_char
             self.advance()
 
         token_type = RESERVED_KEYWORDS.get(value.upper())
-        if token_type is None:
+        if not token_type:
             token.type = TokenType.ID
             token.value = value
         else:
@@ -249,7 +250,7 @@ class Lexer:
 
     def read_string_literal(self):
         value = ''
-        while self.current_char is not None:
+        while self.current_char:
             if self.current_char == '"':
                 self.advance()
                 break
@@ -277,7 +278,7 @@ class Lexer:
         This method is responsible for breaking a sentence
         apart into tokens. One token at a time.
         """
-        while self.current_char is not None:
+        while self.current_char:
             if self.current_char == '-':
                 if self.peek() == '>':
                     token = Token(
@@ -456,6 +457,7 @@ class TypeKind(Enum):
     TY_ARRAY   = auto()
     TY_STRUCT  = auto()
     TY_FUNC    = auto()
+    TY_VOID    = auto()
 
 class Node:
     def __init__(self):
@@ -573,6 +575,11 @@ CharType.kind = TypeKind.TY_CHAR
 CharType.size = 1
 CharType.align = 1
 
+VoidType = Type()
+VoidType.kind = TypeKind.TY_VOID
+VoidType.size = 1
+VoidType.align = 1
+
 class Parser:
     """
     program    = stmt*
@@ -625,7 +632,7 @@ class Parser:
 
     def find_tag(self, token):
         sc = self.tag_scope
-        while sc is not None:
+        while sc:
             if sc.name == token.value:
                 return sc
             sc = sc.next
@@ -633,7 +640,7 @@ class Parser:
 
     def find_var(self, token):
         sc = self.var_scope
-        while sc is not None:
+        while sc:
             if sc.name == token.value:
                 return sc
             sc = sc.next
@@ -836,6 +843,8 @@ class Parser:
         name = None
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
+        if ty.kind == TypeKind.TY_VOID:
+            raise Exception("variable declared void")
         var = self.new_lvar(name, ty)
 
         if self.consume(TokenType.SEMI):
@@ -930,6 +939,7 @@ class Parser:
             self.current_token.type == TokenType.LONG or \
             self.current_token.type == TokenType.CHAR or \
             self.current_token.type == TokenType.STRUCT or \
+            self.current_token.type == TokenType.VOID or \
             self.find_typedef(self.current_token)
 
     def expr(self):
@@ -1166,7 +1176,7 @@ class Parser:
         raise Exception('不合法的操作符')
 
     def add_type(self, node):
-        if node is None or node.ty is not None:
+        if not node or node.ty:
             return
 
         self.add_type(node.lhs)
@@ -1178,11 +1188,11 @@ class Parser:
         self.add_type(node.inc)
 
         n = node.body
-        while n is not None:
+        while n:
             self.add_type(n)
             n = n.next
         n = node.args
-        while n is not None:
+        while n:
             self.add_type(n)
             n = n.next
 
@@ -1221,16 +1231,16 @@ class Parser:
             return
 
         if node.kind == NodeKind.ND_DEREF:
-            if node.lhs.ty.base is not None:
-                node.ty = node.lhs.ty.base
-            else:
-                node.ty = IntType
+            if not node.lhs.ty.base:
+                raise Exception("invalid pointer dereference")
+            node.ty = node.lhs.ty.base
+            if node.ty.kind == TypeKind.TY_VOID:
+                raise Exception("dereferencing a void pointer")
             return
-
 
         if node.kind == NodeKind.ND_STMT_EXPR:
             last = node.body
-            while last.next is not None:
+            while last.next:
                 last = last.next
             node.ty = last.ty
             return
@@ -1259,10 +1269,12 @@ class Parser:
         ty.align = align
         return ty
 
-    # basetype = ("char" | "int" | struct-decl | typedef-name) "*"*
+    # builtin-type   = "void" | "char" | "short" | "int" | "long"
     def basetype(self):
         if self.is_typename() is False:
             raise Exception('这里应该是一个类型名')
+        if self.consume(TokenType.VOID):
+            return VoidType
         if self.consume(TokenType.CHAR):
             return CharType
         elif self.consume(TokenType.SHORT):
@@ -1310,9 +1322,9 @@ class Parser:
     def struct_decl(self):
         self.eat(TokenType.STRUCT)
         tag = self.consume_ident()
-        if tag is not None and self.current_token.type != TokenType.LBRACE:
+        if tag and self.current_token.type != TokenType.LBRACE:
             sc = self.find_tag(tag)
-            if sc is None:
+            if not sc:
                 raise Exception("未知结构体类型")
             return sc.ty
         self.eat(TokenType.LBRACE)
@@ -1329,7 +1341,7 @@ class Parser:
         
         offset = 0
         mem = ty.members
-        while mem is not None:
+        while mem:
             offset = self.align_to(offset, mem.ty.align)
             mem.offset = offset
             offset += mem.ty.size
@@ -1341,7 +1353,7 @@ class Parser:
 
         ty.size = self.align_to(offset, ty.align)
 
-        if tag is not None:
+        if tag:
             self.push_tag_scope(tag, ty)
 
         return ty
@@ -1360,7 +1372,7 @@ class Parser:
 
     def find_member(self, ty, name):
         mem = ty.members
-        while mem is not None:
+        while mem:
             if mem.name == name:
                 return mem
             mem = mem.next
@@ -1374,7 +1386,7 @@ class Parser:
         tok = self.current_token
         mem = self.find_member(lhs.ty, tok.value)
         self.eat(TokenType.ID)
-        if mem is None:
+        if not mem:
             raise Exception('没有这个成员')
 
         node = self.new_unary(NodeKind.ND_MEMBER, lhs, tok)
@@ -1451,7 +1463,7 @@ class Parser:
     def emit_data(self, prog):
         print(".data")
         vl = prog.globals
-        while vl is not None:
+        while vl:
             var = vl.var
             print("%s:" % var.name)
             if not var.contents:
@@ -1496,7 +1508,7 @@ class Parser:
         if node.kind == NodeKind.ND_IF:
             seq = self.labelseq
             self.labelseq += 1
-            if node.els is not None:
+            if node.els:
                 self.code_gen(node.cond)
                 print("  pop rax")
                 print("  cmp rax, 0")
@@ -1529,30 +1541,30 @@ class Parser:
         if node.kind == NodeKind.ND_FOR:
             seq = self.labelseq
             self.labelseq += 1
-            if node.init is not None:
+            if node.init:
                 self.code_gen(node.init)
             print(".L.begin.%d:" % seq)
-            if node.cond is not None:
+            if node.cond:
                 self.code_gen(node.cond)
                 print("  pop rax")
                 print("  cmp rax, 0")
                 print("  je  .L.end.%d" % seq)
             self.code_gen(node.then)
-            if node.inc is not None:
+            if node.inc:
                 self.code_gen(node.inc)
             print("  jmp .L.begin.%d" % seq)
             print(".L.end.%d:" % seq)
             return
         if node.kind == NodeKind.ND_BLOCK or node.kind == NodeKind.ND_STMT_EXPR:
             n = node.body
-            while n is not None:
+            while n:
                 self.code_gen(n)
                 n = n.next
             return
         if node.kind == NodeKind.ND_FUNCALL:
             nargs = 0
             arg = node.args
-            while arg is not None:
+            while arg:
                 self.code_gen(arg)
                 nargs = nargs + 1
                 arg = arg.next
@@ -1653,11 +1665,11 @@ def main():
         parser = Parser(tokens)
         prog = parser.parse()
         fn = prog.fns
-        while fn is not None:
+        while fn:
             offset = 0
             # 局部变量是顺序进入数组的，所以需要逆序弹出算偏移量。
             vl = fn.locals
-            while vl is not None:
+            while vl:
                 var = vl.var
                 offset = parser.align_to(offset, var.ty.align)
                 offset += var.ty.size
@@ -1669,7 +1681,7 @@ def main():
         parser.emit_data(prog)
         print(".text")
         fn = prog.fns
-        while fn is not None:
+        while fn:
             print(".global %s" % fn.name)
             print("%s:" % fn.name)
             parser.funcname = fn.name
@@ -1680,13 +1692,13 @@ def main():
 
             i = 0
             vl = fn.params
-            while vl is not None:
+            while vl:
                 parser.load_arg(vl.var, i)
                 i = i + 1
                 vl = vl.next
 
             node = fn.node
-            while node is not None:
+            while node:
                 parser.code_gen(node)
                 node = node.next
             print(".L.return.%s:" % parser.funcname)
