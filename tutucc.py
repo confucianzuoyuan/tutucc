@@ -455,6 +455,7 @@ class TypeKind(Enum):
     TY_PTR     = auto()
     TY_ARRAY   = auto()
     TY_STRUCT  = auto()
+    TY_FUNC    = auto()
 
 class Node:
     def __init__(self):
@@ -519,12 +520,13 @@ class Member:
 
 class Type:
     def __init__(self):
-        self.kind = None
-        self.base = None    # 指针或者数组
-        self.size = 0       # sizeof()的值
-        self.align = 0
+        self.kind      = None
+        self.base      = None    # 指针或者数组
+        self.size      = 0       # sizeof()的值
+        self.align     = 0
         self.array_len = 0
-        self.members = None   # struct
+        self.members   = None    # struct
+        self.return_ty = None
 
 # C has two block scopes; one is for variables/typedefs and
 # the other is for struct tags.
@@ -702,14 +704,15 @@ class Parser:
         except:
             return False
 
-    def new_gvar(self, name, ty):
+    def new_gvar(self, name, ty, emit):
         var = self.new_var(name, ty, False)
         self.push_scope(name).var = var
 
-        vl = VarList()
-        vl.var = var
-        vl.next = self.globals
-        self.globals = vl
+        if emit:
+            vl = VarList()
+            vl.var = var
+            vl.next = self.globals
+            self.globals = vl
 
         return var
 
@@ -756,7 +759,7 @@ class Parser:
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
         self.eat(TokenType.SEMI)
-        self.new_gvar(name, ty)
+        self.new_gvar(name, ty, True)
 
     # stmt-expr = "(" "{" stmt stmt* "}" ")"
     # Statement expression is a GNU C extension.
@@ -799,7 +802,8 @@ class Parser:
         self.locals = None
         ty = self.basetype()
         name = None
-        _, name = self.declarator(ty, name)
+        ty, name = self.declarator(ty, name)
+        self.new_gvar(name, self.func_type(ty), False)
         fn = Function()
         fn.name = name
 
@@ -1041,6 +1045,17 @@ class Parser:
                 node = self.new_node(NodeKind.ND_FUNCALL, token)
                 node.funcname = token.value
                 node.args = self.func_args()
+                self.add_type(node)
+                sc = self.find_var(token)
+
+                if sc:
+                    if not sc.var or sc.var.ty.kind != TypeKind.TY_FUNC:
+                        raise Exception("不是一个函数！")
+                    node.ty = sc.var.ty.return_ty
+                else:
+                    print("implicit declaration of a function", file=sys.stderr)
+                    node.ty = IntType
+
                 return node
 
             # 查找变量
@@ -1053,11 +1068,16 @@ class Parser:
             self.current_token = self.get_next_token()
 
             ty = self.array_of(CharType, len(token.value))
-            var = self.new_gvar(self.new_label(), ty)
+            var = self.new_gvar(self.new_label(), ty, True)
             var.contents = token.value
             return self.new_var_node(var, token)
 
         return self.new_num(self.expect_number(), token)
+
+    def func_type(self, return_ty):
+        ty = self.new_type(TypeKind.TY_FUNC, 1, 1)
+        ty.return_ty = return_ty
+        return ty
 
     def expect_number(self):
         if self.current_token.type != TokenType.INTEGER_CONST:
@@ -1175,7 +1195,6 @@ class Parser:
            node.kind == NodeKind.ND_NE or      \
            node.kind == NodeKind.ND_LT or      \
            node.kind == NodeKind.ND_LE or      \
-           node.kind == NodeKind.ND_FUNCALL or \
            node.kind == NodeKind.ND_NUM:
             node.ty = LongType
             return
