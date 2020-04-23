@@ -781,10 +781,14 @@ class Parser:
         self.globals = None
         while self.current_token.type != TokenType.EOF:
             if self.is_function():
-                cur.next = self.function()
+                fn = self.function()
+                if not fn:
+                    continue
+                cur.next = fn
                 cur = cur.next
-            else:
-                self.global_var()
+                continue
+
+            self.global_var()
 
         prog = Program()
         prog.globals = self.globals
@@ -802,10 +806,14 @@ class Parser:
         self.eat(TokenType.LPAREN)
         sc = self.enter_scope()
         fn.params = self.read_func_params()
-        self.eat(TokenType.LBRACE)
+        
+        if self.consume(TokenType.SEMI):
+            self.leave_scope(sc)
+            return None
 
         head = Node()
         cur = head
+        self.eat(TokenType.LBRACE)
 
         while not self.consume(TokenType.RBRACE):
             cur.next = self.stmt()
