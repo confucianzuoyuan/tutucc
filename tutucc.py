@@ -758,7 +758,8 @@ class Parser:
         
     def is_function(self):
         idx = self.current_token_index
-        ty = self.basetype()
+        is_typedef = False
+        ty, is_typedef = self.basetype(is_typedef)
         name = None
         _, name = self.declarator(ty, name)
         isfunc = name and self.consume(TokenType.LPAREN)
@@ -768,12 +769,16 @@ class Parser:
 
     # global-var = basetype ident ("[" num "]")* ";"
     def global_var(self):
-        ty = self.basetype()
+        is_typedef = False
+        ty, is_typedef = self.basetype(is_typedef)
         name = None
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
         self.eat(TokenType.SEMI)
-        self.new_gvar(name, ty, True)
+        if is_typedef:
+            self.push_scope(name).type_def = ty
+        else:
+            self.new_gvar(name, ty, True)
 
     # stmt-expr = "(" "{" stmt stmt* "}" ")"
     # Statement expression is a GNU C extension.
@@ -814,7 +819,7 @@ class Parser:
 
     def function(self):
         self.locals = None
-        ty = self.basetype()
+        ty, _ = self.basetype(None)
         name = None
         ty, name = self.declarator(ty, name)
         self.new_gvar(name, self.func_type(ty), False)
@@ -844,12 +849,17 @@ class Parser:
     # declaration = basetype ident ("[" num "]")* ("=" expr) ";"
     def declaration(self):
         token = self.current_token
-        ty = self.basetype()
+        is_typedef = False
+        ty, is_typedef = self.basetype(is_typedef)
         if self.consume(TokenType.SEMI):
             return self.new_node(NodeKind.ND_NULL, token)
         name = None
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
+        if is_typedef:
+            self.eat(TokenType.SEMI)
+            self.push_scope(name).type_def = ty
+            return self.new_node(NodeKind.ND_NULL, token)
         if ty.kind == TypeKind.TY_VOID:
             raise Exception("variable declared void")
         var = self.new_lvar(name, ty)
@@ -924,15 +934,6 @@ class Parser:
             node.body = head.next
             return node
 
-        if self.consume(TokenType.TYPEDEF):
-            ty = self.basetype()
-            name = None
-            ty, name = self.declarator(ty, name)
-            ty = self.type_suffix(ty)
-            self.eat(TokenType.SEMI)
-            self.push_scope(name).type_def = ty
-            return self.new_node(NodeKind.ND_NULL, token)
-
         if self.is_typename():
             return self.declaration()
 
@@ -948,6 +949,7 @@ class Parser:
             self.current_token.type == TokenType.STRUCT or \
             self.current_token.type == TokenType.VOID or \
             self.current_token.type == TokenType._BOOL or \
+            self.current_token.type == TokenType.TYPEDEF or \
             self.find_typedef(self.current_token)
 
     def expr(self):
@@ -1138,7 +1140,7 @@ class Parser:
         return head
 
     def read_func_param(self):
-        ty = self.basetype()
+        ty, _ = self.basetype(None)
         name = None
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
@@ -1279,25 +1281,81 @@ class Parser:
         return ty
 
     # builtin-type   = "void" | "char" | "short" | "int" | "long"
-    def basetype(self):
-        if self.is_typename() is False:
+    def basetype(self, is_typedef):
+        if not self.is_typename():
             raise Exception('这里应该是一个类型名')
-        if self.consume(TokenType.VOID):
-            return VoidType
-        if self.consume(TokenType._BOOL):
-            return BoolType
-        if self.consume(TokenType.CHAR):
-            return CharType
-        elif self.consume(TokenType.SHORT):
-            return ShortType
-        elif self.consume(TokenType.INT):
-            return IntType
-        elif self.consume(TokenType.LONG):
-            self.consume(TokenType.LONG)
-            return LongType
-        elif self.current_token.type == TokenType.STRUCT:
-            return self.struct_decl()
-        return self.find_var(self.consume_ident()).type_def
+
+        VOID  = 1 << 0
+        BOOL  = 1 << 2
+        CHAR  = 1 << 4
+        SHORT = 1 << 6
+        INT   = 1 << 8
+        LONG  = 1 << 10
+        OTHER = 1 << 12
+
+        ty = IntType
+        counter = 0
+
+        if is_typedef != None:
+            is_typedef = False
+
+        while self.is_typename():
+
+            if self.consume(TokenType.TYPEDEF):
+                if is_typedef == None:
+                    raise Exception("invalid storage class specifier")
+                is_typedef = True
+                continue
+
+            if self.current_token.type != TokenType.VOID and \
+               self.current_token.type != TokenType._BOOL and \
+               self.current_token.type != TokenType.CHAR and \
+               self.current_token.type != TokenType.SHORT and \
+               self.current_token.type != TokenType.INT and \
+               self.current_token.type != TokenType.LONG:
+                if counter:
+                    break
+
+                if self.current_token.type == TokenType.STRUCT:
+                    ty = self.struct_decl()
+                else:
+                    ty = self.find_typedef(self.current_token)
+                    assert ty
+                    self.current_token = self.get_next_token()
+
+                counter = counter | OTHER
+                continue
+
+            if self.consume(TokenType.VOID):
+                counter += VOID
+            elif self.consume(TokenType._BOOL):
+                counter += BOOL
+            elif self.consume(TokenType.CHAR):
+                counter += CHAR
+            elif self.consume(TokenType.SHORT):
+                counter += SHORT
+            elif self.consume(TokenType.INT):
+                counter += INT
+            elif self.consume(TokenType.LONG):
+                counter += LONG
+
+            if counter == VOID:
+                ty = VoidType
+            elif counter == BOOL:
+                ty = BoolType
+            elif counter == CHAR:
+                ty = CharType
+            elif counter == SHORT or counter == SHORT + INT:
+                ty = ShortType
+            elif counter == INT:
+                ty = IntType
+            elif counter == LONG or counter == LONG + INT or counter == LONG + LONG or counter == LONG + LONG + INT:
+                ty = LongType
+            else:
+                raise Exception("无效的类型")
+
+        return (ty, is_typedef)
+
 
     def declarator(self, ty, name):
         while self.consume(TokenType.MUL):
@@ -1372,7 +1430,7 @@ class Parser:
 
     # struct-member = basetype ident ("[" num "]")* ";"
     def struct_member(self):
-        ty = self.basetype()
+        ty, _ = self.basetype(None)
         name = None
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
