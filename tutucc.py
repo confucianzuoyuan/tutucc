@@ -60,6 +60,7 @@ class TokenType(Enum):
     SHORT         = 'SHORT'
     LONG          = 'LONG'
     VOID          = 'VOID'
+    _BOOL         = '_BOOL'
     IF            = 'IF'
     ELSE          = 'ELSE'
     WHILE         = 'WHILE'
@@ -310,7 +311,7 @@ class Lexer:
                 self.skip_whitespace()
                 continue
 
-            if self.current_char.isalpha():
+            if self.current_char.isalpha() or self.current_char == '_':
                 return self._id()
 
             if self.current_char.isdigit():
@@ -458,6 +459,7 @@ class TypeKind(Enum):
     TY_STRUCT  = auto()
     TY_FUNC    = auto()
     TY_VOID    = auto()
+    TY_BOOL    = auto()
 
 class Node:
     def __init__(self):
@@ -579,6 +581,11 @@ VoidType = Type()
 VoidType.kind = TypeKind.TY_VOID
 VoidType.size = 1
 VoidType.align = 1
+
+BoolType = Type()
+BoolType.kind = TypeKind.TY_BOOL
+BoolType.size = 1
+BoolType.align = 1
 
 class Parser:
     """
@@ -940,6 +947,7 @@ class Parser:
             self.current_token.type == TokenType.CHAR or \
             self.current_token.type == TokenType.STRUCT or \
             self.current_token.type == TokenType.VOID or \
+            self.current_token.type == TokenType._BOOL or \
             self.find_typedef(self.current_token)
 
     def expr(self):
@@ -1249,7 +1257,8 @@ class Parser:
         return ty.kind == TypeKind.TY_INT or \
             ty.kind == TypeKind.TY_CHAR or \
             ty.kind == TypeKind.TY_SHORT or \
-            ty.kind == TypeKind.TY_LONG
+            ty.kind == TypeKind.TY_LONG or \
+            ty.kind == TypeKind.TY_BOOL
 
     def pointer_to(self, base):
         ty = self.new_type(TypeKind.TY_PTR, 8, 8)
@@ -1275,6 +1284,8 @@ class Parser:
             raise Exception('这里应该是一个类型名')
         if self.consume(TokenType.VOID):
             return VoidType
+        if self.consume(TokenType._BOOL):
+            return BoolType
         if self.consume(TokenType.CHAR):
             return CharType
         elif self.consume(TokenType.SHORT):
@@ -1437,6 +1448,12 @@ class Parser:
     def store(self, ty):
         print("  pop rdi")
         print("  pop rax")
+
+        if ty.kind == TypeKind.TY_BOOL:
+            print("  cmp rdi, 0")
+            print("  setne dil")
+            print("  movzb rdi, dil")
+
         if ty.size == 1:
             print("  mov [rax], dil")
         elif ty.size == 2:
