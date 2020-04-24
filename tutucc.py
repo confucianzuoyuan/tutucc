@@ -1293,6 +1293,7 @@ class Parser:
         elif self.consume(TokenType.INT):
             return IntType
         elif self.consume(TokenType.LONG):
+            self.consume(TokenType.LONG)
             return LongType
         elif self.current_token.type == TokenType.STRUCT:
             return self.struct_decl()
