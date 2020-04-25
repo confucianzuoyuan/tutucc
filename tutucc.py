@@ -884,13 +884,21 @@ class Parser:
         if self.consume(TokenType.FOR):
             node = self.new_node(NodeKind.ND_FOR, token)
             self.eat(TokenType.LPAREN)
-            while not self.consume(TokenType.SEMI):
-                node.init = self.read_expr_stmt()
-            while not self.consume(TokenType.SEMI):
+            sc = self.enter_scope()
+            if not self.consume(TokenType.SEMI):
+                if self.is_typename():
+                    node.init = self.declaration()
+                else:
+                    node.init = self.read_expr_stmt()
+                    self.eat(TokenType.SEMI)
+            if not self.consume(TokenType.SEMI):
                 node.cond = self.expr()
-            while not self.consume(TokenType.RPAREN):
+                self.eat(TokenType.SEMI)
+            if not self.consume(TokenType.RPAREN):
                 node.inc = self.read_expr_stmt()
+                self.eat(TokenType.RPAREN)
             node.then = self.stmt()
+            self.leave_scope(sc)
             return node
 
         if self.consume(TokenType.LBRACE):
