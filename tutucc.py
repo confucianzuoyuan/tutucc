@@ -1046,6 +1046,7 @@ class Parser:
     #         | num
     def primary(self):
         token = self.current_token
+        token_idx = self.current_token_index
         if self.consume(TokenType.LPAREN):
             if self.consume(TokenType.LBRACE):
                 return self.stmt_expr(token)
@@ -1054,6 +1055,14 @@ class Parser:
             return node
 
         if self.consume(TokenType.SIZEOF):
+            if self.consume(TokenType.LPAREN):
+              if self.is_typename():
+                ty = self.type_name()
+                self.eat(TokenType.RPAREN)
+                return self.new_num(ty.size, token)
+              self.current_token_index = token_idx + 1
+              self.current_token = self.tokens[self.current_token_index]
+
             node = self.unary()
             self.add_type(node)
             return self.new_num(node.ty.size, token)
@@ -1093,6 +1102,20 @@ class Parser:
             return self.new_var_node(var, token)
 
         return self.new_num(self.expect_number(), token)
+
+    # abstract-declarator = "*"* ("(" abstract-declarator ")")? type-suffix
+    def abstract_declarator(self, ty):
+        while self.consume(TokenType.MUL):
+            ty = self.pointer_to(ty)
+
+        if self.consume(TokenType.LPAREN):
+            placeholder = Type()
+            new_ty = self.abstract_declarator(placeholder)
+            self.eat(TokenType.RPAREN)
+            placeholder.__dict__.update(self.type_suffix(ty).__dict__)
+            return new_ty
+
+        return self.type_suffix(ty)
 
     def func_type(self, return_ty):
         ty = self.new_type(TypeKind.TY_FUNC, 1, 1)
@@ -1386,6 +1409,12 @@ class Parser:
         self.eat(TokenType.RBRACKET)
         ty = self.type_suffix(ty)
         return self.array_of(ty, sz)
+
+    # type-name = basetype abstract-declarator type-suffix
+    def type_name(self):
+        ty, _ = self.basetype(None)
+        ty = self.abstract_declarator(ty)
+        return self.type_suffix(ty)
 
     # struct-decl = "struct" ident
     #             | "struct" ident? "{" struct-member "}"
