@@ -306,18 +306,6 @@ class Lexer:
         apart into tokens. One token at a time.
         """
         while self.current_char:
-            if self.current_char == '-':
-                if self.peek() == '>':
-                    token = Token(
-                        type=TokenType.ARROW,
-                        value='->',
-                        lineno=self.lineno,
-                        column=self.column,
-                    )
-                    self.advance()
-                    self.advance()
-                    return token
-
             if self.current_char == '/':
                 if self.peek() == '/':
                     self.advance()
@@ -343,80 +331,6 @@ class Lexer:
             if self.current_char.isdigit():
                 return self.number()
 
-            if self.current_char == '>' and self.peek() == '=':
-                token = Token(
-                    type=TokenType.GE,
-                    value='>=',
-                    lineno=self.lineno,
-                    column=self.column,
-                )
-                self.advance()
-                self.advance()
-                return token
-
-            if self.current_char == '>':
-                token = Token(
-                    type=TokenType.GT,
-                    value='>',
-                    lineno=self.lineno,
-                    column=self.column,
-                )
-                self.advance()
-                return token
-
-            if self.current_char == '<' and self.peek() == '=':
-                token = Token(
-                    type=TokenType.LE,
-                    value='<=',
-                    lineno=self.lineno,
-                    column=self.column,
-                )
-                self.advance()
-                self.advance()
-                return token
-
-            if self.current_char == '<':
-                token = Token(
-                    type=TokenType.LT,
-                    value='<',
-                    lineno=self.lineno,
-                    column=self.column,
-                )
-                self.advance()
-                return token
-
-            if self.current_char == '=' and self.peek() == '=':
-                token = Token(
-                    type=TokenType.EQ,
-                    value='==',
-                    lineno=self.lineno,
-                    column=self.column,
-                )
-                self.advance()
-                self.advance()
-                return token
-
-            if self.current_char == '=':
-                token = Token(
-                    type=TokenType.ASSIGN,
-                    value='=',
-                    lineno=self.lineno,
-                    column=self.column,
-                )
-                self.advance()
-                return token
-
-            if self.current_char == '!' and self.peek() == '=':
-                token = Token(
-                    type=TokenType.NE,
-                    value=TokenType.NE.value,  # ':='
-                    lineno=self.lineno,
-                    column=self.column,
-                )
-                self.advance()
-                self.advance()
-                return token
-
             if self.current_char == '"':
                 self.advance()
                 token = self.read_string_literal()
@@ -425,6 +339,22 @@ class Lexer:
 
             if self.current_char == '\'':
                 token = self.read_char_literal()
+                return token
+
+            # two-characters token
+            try:
+                token_type = TokenType(self.current_char + self.peek())
+            except:
+                pass
+            else:
+                token = Token(
+                    type=token_type,
+                    value=token_type.value,
+                    lineno=self.lineno,
+                    column=self.column
+                )
+                self.advance()
+                self.advance()
                 return token
 
             # single-character token
