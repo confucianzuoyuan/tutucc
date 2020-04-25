@@ -61,6 +61,7 @@ class TokenType(Enum):
     LONG          = 'LONG'
     VOID          = 'VOID'
     _BOOL         = '_BOOL'
+    ENUM          = 'ENUM'
     IF            = 'IF'
     ELSE          = 'ELSE'
     WHILE         = 'WHILE'
@@ -421,6 +422,7 @@ class TypeKind(Enum):
     TY_FUNC    = auto()
     TY_VOID    = auto()
     TY_BOOL    = auto()
+    TY_ENUM    = auto()
 
 class Node:
     def __init__(self):
@@ -463,25 +465,25 @@ class Var:
 
 class Function:
     def __init__(self):
-        self.name = None
-        self.node = None
-        self.params = None
-        self.locals = None
+        self.name       = None
+        self.node       = None
+        self.params     = None
+        self.locals     = None
         self.stack_size = 0
-        self.ty = None
-        self.next = None
+        self.ty         = None
+        self.next       = None
 
 class Program:
     def __init__(self):
         self.globals = None
-        self.fns = None
+        self.fns     = None
 
 class Member:
     def __init__(self):
-        self.ty = None
-        self.name = None
+        self.ty     = None
+        self.name   = None
         self.offset = 0
-        self.next = None
+        self.next   = None
 
 class Type:
     def __init__(self):
@@ -503,10 +505,12 @@ class TagScope:
 
 class VarScope:
     def __init__(self):
-        self.var = None
-        self.next = None
-        self.name = None
+        self.var      = None
+        self.next     = None
+        self.name     = None
         self.type_def = None
+        self.enum_ty  = None
+        self.enum_val = 0
 
 class Scope:
     def __init__(self):
@@ -911,6 +915,7 @@ class Parser:
             self.current_token.type == TokenType.VOID or \
             self.current_token.type == TokenType._BOOL or \
             self.current_token.type == TokenType.TYPEDEF or \
+            self.current_token.type == TokenType.ENUM or \
             self.find_typedef(self.current_token)
 
     def expr(self):
@@ -1051,9 +1056,12 @@ class Parser:
 
             # 查找变量
             sc = self.find_var(token)
-            if sc and sc.var:
-                return self.new_var_node(sc.var, token)
-            raise Exception("没有找到变量")
+            if sc:
+                if sc.var:
+                    return self.new_var_node(sc.var, token)
+                if sc.enum_ty:
+                    return self.new_num(sc.enum_val, token)
+            raise Exception("未定义的变量")
 
         if token.type == TokenType.STR:
             self.current_token = self.get_next_token()
@@ -1064,6 +1072,51 @@ class Parser:
             return self.new_var_node(var, token)
 
         return self.new_num(self.expect_number(), token)
+
+    def consume_end(self):
+        token_idx = self.current_token_index
+        if self.consume(TokenType.RBRACE) or (self.consume(TokenType.COMMA and self.consume(TokenType.RBRACE))):
+            return True
+        self.current_token_index = token_idx
+        self.current_token = self.tokens[self.current_token_index]
+        return False
+
+    def enum_type(self):
+        return self.new_type(TypeKind.TY_ENUM, 4, 4)
+
+    def enum_specifier(self):
+        self.eat(TokenType.ENUM)
+        ty = self.enum_type()
+        tag = self.consume_ident()
+
+        if tag and self.current_token.type != TokenType.LBRACE:
+            sc = self.find_tag(tag)
+            if not sc:
+                raise Exception("未知枚举类型！")
+            if sc.ty.kind != TypeKind.TY_ENUM:
+                raise Exception("不是枚举标签！")
+            return sc.ty
+
+        self.eat(TokenType.LBRACE)
+
+        cnt = 0
+        while True:
+            name = self.expect_ident()
+            if self.consume(TokenType.ASSIGN):
+                cnt = self.expect_number()
+            sc = self.push_scope(name)
+            sc.enum_ty = ty
+            sc.enum_val = cnt
+            cnt += 1
+
+            if self.consume_end():
+                break
+            self.eat(TokenType.COMMA)
+
+        if tag:
+            self.push_tag_scope(tag, ty)
+
+        return ty
 
     # abstract-declarator = "*"* ("(" abstract-declarator ")")? type-suffix
     def abstract_declarator(self, ty):
@@ -1303,6 +1356,8 @@ class Parser:
 
                 if self.current_token.type == TokenType.STRUCT:
                     ty = self.struct_decl()
+                elif self.current_token.type == TokenType.ENUM:
+                    ty = self.enum_specifier()
                 else:
                     ty = self.find_typedef(self.current_token)
                     assert ty
@@ -1387,6 +1442,8 @@ class Parser:
             sc = self.find_tag(tag)
             if not sc:
                 raise Exception("未知结构体类型")
+            if sc.ty.kind != TypeKind.TY_STRUCT:
+                raise Exception("不是结构体标签")
             return sc.ty
         self.eat(TokenType.LBRACE)
 
