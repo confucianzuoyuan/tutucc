@@ -448,6 +448,7 @@ class NodeKind(Enum):
     ND_VAR       = auto() # Variable
     ND_NUM       = auto() # Integer
     ND_NULL      = auto() # Empty statement
+    ND_CAST      = auto()
 
 class TypeKind(Enum):
     TY_CHAR    = auto()
@@ -1003,14 +1004,15 @@ class Parser:
 
         return node
 
+    # mul = cast ("*" cast | "/" cast)*
     def mul(self):
-        node = self.unary()
+        node = self.cast()
         while True:
             token = self.current_token
             if self.consume(TokenType.MUL):
-                node = self.new_binary(NodeKind.ND_MUL, node, self.unary(), token)
+                node = self.new_binary(NodeKind.ND_MUL, node, self.cast(), token)
             elif self.consume(TokenType.DIV):
-                node = self.new_binary(NodeKind.ND_DIV, node, self.unary(), token)
+                node = self.new_binary(NodeKind.ND_DIV, node, self.cast(), token)
             else:
                 return node
 
@@ -1134,18 +1136,18 @@ class Parser:
         self.cnt += 1
         return s
 
-    # unary = ("+" | "-" | "*" | "&")? unary
+    # unary = ("+" | "-" | "*" | "&")? cast
     #       | postfix
     def unary(self):
         token = self.current_token
         if self.consume(TokenType.PLUS):
-            return self.primary()
+            return self.cast()
         if self.consume(TokenType.MINUS):
-            return self.new_binary(NodeKind.ND_SUB, self.new_num(0, token), self.unary(), token)
+            return self.new_binary(NodeKind.ND_SUB, self.new_num(0, token), self.cast(), token)
         if self.consume(TokenType.ADDR):
-            return self.new_unary(NodeKind.ND_ADDR, self.unary(), token)
+            return self.new_unary(NodeKind.ND_ADDR, self.cast(), token)
         if self.consume(TokenType.MUL):
-            return self.new_unary(NodeKind.ND_DEREF, self.unary(), token)
+            return self.new_unary(NodeKind.ND_DEREF, self.cast(), token)
         return self.postfix()
 
     def func_args(self):
@@ -1582,14 +1584,48 @@ class Parser:
     def align_to(self, n, align):
         return (n + align - 1) & ~(align - 1)
 
+    # cast = "(" type-name ")" cast | unary
+    def cast(self):
+        token = self.current_token
+        token_idx = self.current_token_index
+
+        if self.consume(TokenType.LPAREN):
+            if self.is_typename():
+                ty = self.type_name()
+                self.eat(TokenType.RPAREN)
+                node = self.new_unary(NodeKind.ND_CAST, self.cast(), token)
+                self.add_type(node.lhs)
+                node.ty = ty
+                return node
+            self.current_token_index = token_idx
+            self.current_token = self.tokens[self.current_token_index]
+
+        return self.unary()
+
+    def truncate(self, ty):
+        print("  pop rax")
+
+        if ty.kind == TypeKind.TY_BOOL:
+            print("  cmp rax, 0")
+            print("  setne al")
+
+        if ty.size == 1:
+            print("  movsx rax, al")
+        elif ty.size == 2:
+            print("  movsx rax, ax")
+        elif ty.size == 4:
+            print("  movsxd rax, eax")
+
+        print("  push rax")
+
     def code_gen(self, node):
         if node.kind == NodeKind.ND_NULL:
             return
         if node.kind == NodeKind.ND_NUM:
-            if node.val == int(node.val):
+            if node.val == (int(node.val) >> 32):
                 print("  push %s" % node.val)
             else:
-                print("  movabs rax, %s", node.val)
+                print("  movabs rax, %s" % node.val)
                 print("  push rax")
             return
         if node.kind == NodeKind.ND_EXPR_STMT:
@@ -1701,6 +1737,10 @@ class Parser:
             self.code_gen(node.lhs)
             print("  pop rax")
             print("  jmp .L.return.%s" % self.funcname)
+            return
+        if node.kind == NodeKind.ND_CAST:
+            self.code_gen(node.lhs)
+            self.truncate(node.ty)
             return
 
         self.code_gen(node.lhs)
