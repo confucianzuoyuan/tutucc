@@ -249,6 +249,32 @@ class Lexer:
         if c == '0': return 0
         return c
 
+    def read_char_literal(self):
+        self.advance()
+        if self.current_char == '\0':
+            raise Exception("没有闭合的字符字面量！")
+
+        if self.current_char == '\\':
+            self.advance()
+            value = self.get_escape_char(self.current_char)
+            self.advance()
+        else:
+            value = self.current_char
+            self.advance()
+
+        if self.current_char != '\'':
+            raise Exception("字符字面量太长了！")
+        self.advance()
+
+        tok = Token(
+            type=TokenType.INTEGER_CONST,
+            value=ord(value),
+            lineno=self.lineno,
+            column=self.column
+        )
+        return tok
+
+
     def read_string_literal(self):
         value = ''
         while self.current_char:
@@ -395,6 +421,10 @@ class Lexer:
                 self.advance()
                 token = self.read_string_literal()
 
+                return token
+
+            if self.current_char == '\'':
+                token = self.read_char_literal()
                 return token
 
             # single-character token
