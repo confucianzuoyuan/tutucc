@@ -62,6 +62,7 @@ class TokenType(Enum):
     VOID          = 'VOID'
     _BOOL         = '_BOOL'
     ENUM          = 'ENUM'
+    STATIC        = 'STATIC'
     IF            = 'IF'
     ELSE          = 'ELSE'
     WHILE         = 'WHILE'
@@ -472,6 +473,7 @@ class Function:
         self.stack_size = 0
         self.ty         = None
         self.next       = None
+        self.is_static  = False
 
 class Program:
     def __init__(self):
@@ -551,6 +553,10 @@ BoolType = Type()
 BoolType.kind = TypeKind.TY_BOOL
 BoolType.size = 1
 BoolType.align = 1
+
+class StorageClass(Enum):
+    TYPEDEF = 1 << 0
+    STATIC  = 1 << 1
 
 class Parser:
     """
@@ -723,8 +729,8 @@ class Parser:
         
     def is_function(self):
         idx = self.current_token_index
-        is_typedef = False
-        ty, is_typedef = self.basetype(is_typedef)
+        sclass = 1
+        ty, sclass = self.basetype(sclass)
         name = None
         _, name = self.declarator(ty, name)
         isfunc = name and self.consume(TokenType.LPAREN)
@@ -734,13 +740,13 @@ class Parser:
 
     # global-var = basetype ident ("[" num "]")* ";"
     def global_var(self):
-        is_typedef = False
-        ty, is_typedef = self.basetype(is_typedef)
+        sclass = 1
+        ty, sclass = self.basetype(sclass)
         name = None
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
         self.eat(TokenType.SEMI)
-        if is_typedef:
+        if sclass == StorageClass.TYPEDEF.value:
             self.push_scope(name).type_def = ty
         else:
             self.new_gvar(name, ty, True)
@@ -784,12 +790,14 @@ class Parser:
 
     def function(self):
         self.locals = None
-        ty, _ = self.basetype(None)
+        sclass = 1
+        ty, sclass = self.basetype(sclass)
         name = None
         ty, name = self.declarator(ty, name)
         self.new_gvar(name, self.func_type(ty), False)
         fn = Function()
         fn.name = name
+        fn.is_static = (sclass == StorageClass.STATIC.value)
 
         self.eat(TokenType.LPAREN)
         sc = self.enter_scope()
@@ -814,14 +822,14 @@ class Parser:
     # declaration = basetype ident ("[" num "]")* ("=" expr) ";"
     def declaration(self):
         token = self.current_token
-        is_typedef = False
-        ty, is_typedef = self.basetype(is_typedef)
+        sclass = 1
+        ty, sclass = self.basetype(sclass)
         if self.consume(TokenType.SEMI):
             return self.new_node(NodeKind.ND_NULL, token)
         name = None
         ty, name = self.declarator(ty, name)
         ty = self.type_suffix(ty)
-        if is_typedef:
+        if sclass == StorageClass.TYPEDEF.value:
             self.eat(TokenType.SEMI)
             self.push_scope(name).type_def = ty
             return self.new_node(NodeKind.ND_NULL, token)
@@ -916,6 +924,7 @@ class Parser:
             self.current_token.type == TokenType._BOOL or \
             self.current_token.type == TokenType.TYPEDEF or \
             self.current_token.type == TokenType.ENUM or \
+            self.current_token.type == TokenType.STATIC or \
             self.find_typedef(self.current_token)
 
     def expr(self):
@@ -1319,7 +1328,7 @@ class Parser:
         return ty
 
     # builtin-type   = "void" | "char" | "short" | "int" | "long"
-    def basetype(self, is_typedef):
+    def basetype(self, sclass):
         if not self.is_typename():
             raise Exception('这里应该是一个类型名')
 
@@ -1334,15 +1343,21 @@ class Parser:
         ty = IntType
         counter = 0
 
-        if is_typedef != None:
-            is_typedef = False
+        if sclass != None:
+            sclass = 0
 
         while self.is_typename():
 
-            if self.consume(TokenType.TYPEDEF):
-                if is_typedef == None:
-                    raise Exception("invalid storage class specifier")
-                is_typedef = True
+            if self.current_token.type == TokenType.TYPEDEF or \
+               self.current_token.type == TokenType.STATIC:
+                if sclass == None:
+                   raise Exception("storage class specifier is not allowed")
+                if self.consume(TokenType.TYPEDEF):
+                    sclass |= StorageClass.TYPEDEF.value
+                elif self.consume(TokenType.STATIC):
+                    sclass |= StorageClass.STATIC.value
+                if sclass & (sclass - 1):
+                    raise Exception("typedef and static may not be used together")
                 continue
 
             if self.current_token.type != TokenType.VOID and \
@@ -1394,7 +1409,7 @@ class Parser:
             else:
                 raise Exception("无效的类型")
 
-        return (ty, is_typedef)
+        return (ty, sclass)
 
 
     def declarator(self, ty, name):
@@ -1848,7 +1863,8 @@ def main():
         print(".text")
         fn = prog.fns
         while fn:
-            print(".global %s" % fn.name)
+            if not fn.is_static:
+                print(".global %s" % fn.name)
             print("%s:" % fn.name)
             parser.funcname = fn.name
 
