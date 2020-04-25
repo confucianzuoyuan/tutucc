@@ -1586,7 +1586,11 @@ class Parser:
         if node.kind == NodeKind.ND_NULL:
             return
         if node.kind == NodeKind.ND_NUM:
-            print("  push %s" % node.val)
+            if node.val == int(node.val):
+                print("  push %s" % node.val)
+            else:
+                print("  movabs rax, %s", node.val)
+                print("  push rax")
             return
         if node.kind == NodeKind.ND_EXPR_STMT:
             self.code_gen(node.lhs)
