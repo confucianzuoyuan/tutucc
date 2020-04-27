@@ -80,6 +80,8 @@ class TokenType(Enum):
     EOF           = 'EOF'
     ADDR          = '&'
     STR           = 'STR'
+    TWOADD        = '++'
+    TWOSUB        = '--'
 
 class Token:
     def __init__(self, type, value, lineno=None, column=None):
@@ -412,6 +414,11 @@ class NodeKind(Enum):
     ND_NULL      = auto() # Empty statement
     ND_CAST      = auto()
     ND_COMMA     = auto()
+    ND_PRE_INC   = auto() # pre ++
+    ND_PRE_DEC   = auto() # pre --
+    ND_POST_INC  = auto() # post ++
+    ND_POST_DEC  = auto() # post --
+
 
 class TypeKind(Enum):
     TY_CHAR    = auto()
@@ -1028,6 +1035,14 @@ class Parser:
                 node = self.struct_ref(node)
                 continue
 
+            if self.consume(TokenType.TWOADD):
+                node = self.new_unary(NodeKind.ND_POST_INC, node, token)
+                continue
+
+            if self.consume(TokenType.TWOSUB):
+                node = self.new_unary(NodeKind.ND_POST_DEC, node, token)
+                continue
+
             return node
 
     # primary = "(" "{" stmt-expr-tail
@@ -1186,6 +1201,10 @@ class Parser:
             return self.new_unary(NodeKind.ND_ADDR, self.cast(), token)
         if self.consume(TokenType.MUL):
             return self.new_unary(NodeKind.ND_DEREF, self.cast(), token)
+        if self.consume(TokenType.TWOADD):
+            return self.new_unary(NodeKind.ND_PRE_INC, self.unary(), token)
+        if self.consume(TokenType.TWOSUB):
+            return self.new_unary(NodeKind.ND_PRE_DEC, self.unary(), token)
         return self.postfix()
 
     def func_args(self):
@@ -1284,6 +1303,10 @@ class Parser:
 
         if node.kind == NodeKind.ND_PTR_ADD or \
            node.kind == NodeKind.ND_PTR_SUB or \
+           node.kind == NodeKind.ND_PRE_INC or \
+           node.kind == NodeKind.ND_PRE_DEC or \
+           node.kind == NodeKind.ND_POST_INC or \
+           node.kind == NodeKind.ND_POST_DEC or \
            node.kind == NodeKind.ND_ASSIGN:
             node.ty = node.lhs.ty
             return
@@ -1569,7 +1592,7 @@ class Parser:
             token=self.current_token,
         )
 
-    def gen_lvar(self, node):
+    def gen_lval(self, node):
         if node.ty.kind == TypeKind.TY_ARRAY:
             raise Exception(node.token + '不是左值')
         self.gen_addr(node)
@@ -1670,6 +1693,17 @@ class Parser:
 
         print("  push rax")
 
+    def inc(self, ty):
+        print("  pop rax")
+        print("  add rax, %d" % (ty.base.size if ty.base else 1))
+        print("  push rax")
+
+    def dec(self, ty):
+        print(" pop rax")
+        print("  sub rax, %d" % (ty.base.size if ty.base else 1))
+        print("  push rax")
+
+
     def code_gen(self, node):
         if node.kind == NodeKind.ND_NULL:
             return
@@ -1690,10 +1724,41 @@ class Parser:
                 self.load(node.ty)
             return
         if node.kind == NodeKind.ND_ASSIGN:
-            self.gen_lvar(node.lhs)
+            self.gen_lval(node.lhs)
             self.code_gen(node.rhs)
             self.store(node.ty)
             return
+        if node.kind == NodeKind.ND_PRE_INC:
+            self.gen_lval(node.lhs)
+            print("  push [rsp]")
+            self.load(node.ty)
+            self.inc(node.ty)
+            self.store(node.ty)
+            return
+        if node.kind == NodeKind.ND_PRE_DEC:
+            self.gen_lval(node.lhs)
+            print("  push [rsp]")
+            self.load(node.ty)
+            self.dec(node.ty)
+            self.store(node.ty)
+            return
+        if node.kind == NodeKind.ND_POST_INC:
+            self.gen_lval(node.lhs)
+            print("  push [rsp]")
+            self.load(node.ty)
+            self.inc(node.ty)
+            self.store(node.ty)
+            self.dec(node.ty)
+            return
+        if node.kind == NodeKind.ND_POST_DEC:
+            self.gen_lval(node.lhs)
+            print("  push [rsp]")
+            self.load(node.ty)
+            self.dec(node.ty)
+            self.store(node.ty)
+            self.inc(node.ty)
+            return
+
         if node.kind == NodeKind.ND_COMMA:
             self.code_gen(node.lhs)
             self.code_gen(node.rhs)
