@@ -411,6 +411,7 @@ class NodeKind(Enum):
     ND_NUM       = auto() # Integer
     ND_NULL      = auto() # Empty statement
     ND_CAST      = auto()
+    ND_COMMA     = auto()
 
 class TypeKind(Enum):
     TY_CHAR    = auto()
@@ -935,8 +936,15 @@ class Parser:
             self.current_token.type == TokenType.STATIC or \
             self.find_typedef(self.current_token)
 
+    # expr = assign ("," assign)*
     def expr(self):
-        return self.assign()
+        node = self.assign()
+        token = self.current_token
+        while self.consume(TokenType.COMMA):
+            node = self.new_unary(NodeKind.ND_EXPR_STMT, node, node.tok)
+            node = self.new_binary(NodeKind.ND_COMMA, node, self.assign(), token)
+            token = self.current_token
+        return node
 
     def assign(self):
         node = self.equality()
@@ -1286,6 +1294,10 @@ class Parser:
 
         if node.kind == NodeKind.ND_MEMBER:
             node.ty = node.member.ty
+            return
+        
+        if node.kind == NodeKind.ND_COMMA:
+            node.ty = node.rhs.ty
             return
 
         if node.kind == NodeKind.ND_ADDR:
@@ -1681,6 +1693,10 @@ class Parser:
             self.gen_lvar(node.lhs)
             self.code_gen(node.rhs)
             self.store(node.ty)
+            return
+        if node.kind == NodeKind.ND_COMMA:
+            self.code_gen(node.lhs)
+            self.code_gen(node.rhs)
             return
         if node.kind == NodeKind.ND_ADDR:
             self.gen_addr(node.lhs)
