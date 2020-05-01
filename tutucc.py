@@ -54,6 +54,10 @@ class TokenType(Enum):
     NE            = '!='
     EQ            = '=='
     ARROW         = '->'
+    MULEQ         = '*='
+    DIVEQ         = '/='
+    ADDEQ         = '+='
+    SUBEQ         = '-='
     # block of reserved words
     INT           = 'INT'
     CHAR          = 'CHAR'
@@ -418,6 +422,13 @@ class NodeKind(Enum):
     ND_PRE_DEC   = auto() # pre --
     ND_POST_INC  = auto() # post ++
     ND_POST_DEC  = auto() # post --
+    ND_ADD_EQ    = auto() # +=
+    ND_PTR_ADD_EQ= auto() # +=
+    ND_SUB_EQ    = auto() # -=
+    ND_PTR_SUB_EQ= auto() # -=
+    ND_MUL_EQ    = auto() # *=
+    ND_DIV_EQ    = auto() # /=
+
 
 
 class TypeKind(Enum):
@@ -958,7 +969,23 @@ class Parser:
 
         token = self.current_token
         if self.consume(TokenType.ASSIGN):
-            node = self.new_binary(NodeKind.ND_ASSIGN, node, self.assign(), token)
+            return self.new_binary(NodeKind.ND_ASSIGN, node, self.assign(), token)
+        if self.consume(TokenType.MULEQ):
+            return self.new_binary(NodeKind.ND_MUL_EQ, node, self.assign(), token)
+        if self.consume(TokenType.DIVEQ):
+            return self.new_binary(NodeKind.ND_DIV_EQ, node, self.assign(), token)
+        if self.consume(TokenType.ADDEQ):
+            self.add_type(node)
+            if node.ty.base:
+                return self.new_binary(NodeKind.ND_PTR_ADD_EQ, node, self.assign(), token)
+            else:
+                return self.new_binary(NodeKind.ND_ADD_EQ, node, self.assign(), token)
+        if self.consume(TokenType.SUBEQ):
+            self.add_type(node)
+            if node.ty.base:
+                return self.new_binary(NodeKind.ND_PTR_SUB_EQ, node, self.assign(), token)
+            else:
+                return self.new_binary(NodeKind.ND_SUB_EQ, node, self.assign(), token)
         return node
 
     def equality(self):
@@ -1307,7 +1334,13 @@ class Parser:
            node.kind == NodeKind.ND_PRE_DEC or \
            node.kind == NodeKind.ND_POST_INC or \
            node.kind == NodeKind.ND_POST_DEC or \
-           node.kind == NodeKind.ND_ASSIGN:
+           node.kind == NodeKind.ND_ASSIGN or \
+           node.kind == NodeKind.ND_ADD_EQ or \
+           node.kind == NodeKind.ND_PTR_ADD_EQ or \
+           node.kind == NodeKind.ND_SUB_EQ or \
+           node.kind == NodeKind.ND_PTR_SUB_EQ or \
+           node.kind == NodeKind.ND_MUL_EQ or \
+           node.kind == NodeKind.ND_DIV_EQ:
             node.ty = node.lhs.ty
             return
 
@@ -1758,6 +1791,19 @@ class Parser:
             self.store(node.ty)
             self.inc(node.ty)
             return
+        if node.kind == NodeKind.ND_ADD_EQ or \
+           node.kind == NodeKind.ND_PTR_ADD_EQ or \
+           node.kind == NodeKind.ND_SUB_EQ or \
+           node.kind == NodeKind.ND_PTR_SUB_EQ or \
+           node.kind == NodeKind.ND_MUL_EQ or \
+           node.kind == NodeKind.ND_DIV_EQ:
+            self.gen_lval(node.lhs)
+            print("  push [rsp]")
+            self.load(node.lhs.ty)
+            self.code_gen(node.rhs)
+            self.gen_binary(node)
+            self.store(node.ty)
+            return
 
         if node.kind == NodeKind.ND_COMMA:
             self.code_gen(node.lhs)
@@ -1867,17 +1913,20 @@ class Parser:
         self.code_gen(node.lhs)
         self.code_gen(node.rhs)
 
+        self.gen_binary(node)
+
+    def gen_binary(self, node):
         print("  pop rdi")
         print("  pop rax")
 
-        if node.kind == NodeKind.ND_ADD:
+        if node.kind == NodeKind.ND_ADD or node.kind == NodeKind.ND_ADD_EQ:
             print("  add rax, rdi")
-        if node.kind == NodeKind.ND_PTR_ADD:
+        if node.kind == NodeKind.ND_PTR_ADD or node.kind == NodeKind.ND_PTR_ADD_EQ:
             print("  imul rdi, %d" % node.ty.base.size)
             print("  add rax, rdi")
-        if node.kind == NodeKind.ND_SUB:
+        if node.kind == NodeKind.ND_SUB or node.kind == NodeKind.ND_SUB_EQ:
             print("  sub rax, rdi")
-        if node.kind == NodeKind.ND_PTR_SUB:
+        if node.kind == NodeKind.ND_PTR_SUB or node.kind == NodeKind.ND_PTR_SUB_EQ:
             print("  imul rdi, %d" % node.ty.base.size)
             print("  sub rax, rdi")
         if node.kind == NodeKind.ND_PTR_DIFF:
@@ -1885,9 +1934,9 @@ class Parser:
             print("  cqo")
             print("  mov rdi, %d" % node.lhs.ty.base.size)
             print("  idiv rdi")
-        if node.kind == NodeKind.ND_MUL:
+        if node.kind == NodeKind.ND_MUL or node.kind == NodeKind.ND_MUL_EQ:
             print("  imul rax, rdi")
-        if node.kind == NodeKind.ND_DIV:
+        if node.kind == NodeKind.ND_DIV or node.kind == NodeKind.ND_DIV_EQ:
             print("  cqo")
             print("  idiv rdi")
         if node.kind == NodeKind.ND_EQ:
