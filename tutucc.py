@@ -2,10 +2,6 @@ import argparse
 import sys
 from enum import Enum, auto
 
-argreg1 = ["dil", "sil", "dl", "cl", "r8b", "r9b"]
-argreg2 = ["di", "si", "dx", "cx", "r8w", "r9w"]
-argreg4 = ["edi", "esi", "edx", "ecx", "r8d", "r9d"]
-argreg8 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 
 class ErrorCode(Enum):
     UNEXPECTED_TOKEN = 'Unexpected token'
@@ -597,8 +593,6 @@ class Parser:
         self.globals = None
         self.var_scope = None
         self.tag_scope = None
-        self.labelseq = 1
-        self.funcname = None
         self.tokens = tokens
         self.current_token = self.tokens[self.current_token_index]
         self.cnt = 0
@@ -1602,92 +1596,7 @@ class Parser:
         node.member = mem
         return node
 
-    def gen_addr(self, node):
-        if node.kind == NodeKind.ND_VAR:
-            if node.var.is_local:
-                print("  lea rax, [rbp-%d]" % node.var.offset)
-                print("  push rax")
-            else:
-                print("  push offset %s" % node.var.name)
-            return
-        if node.kind == NodeKind.ND_DEREF:
-            self.code_gen(node.lhs)
-            return
-        if node.kind == NodeKind.ND_MEMBER:
-            self.gen_addr(node.lhs)
-            print("  pop rax")
-            print("  add rax, %d" % node.member.offset)
-            print("  push rax")
-            return
-        
-        self.error(
-            error_code=ErrorCode.UNEXPECTED_TOKEN,
-            token=self.current_token,
-        )
 
-    def gen_lval(self, node):
-        if node.ty.kind == TypeKind.TY_ARRAY:
-            raise Exception(node.token + '不是左值')
-        self.gen_addr(node)
-
-    def load(self, ty):
-        print("  pop rax")
-        if ty.size == 1:
-            print("  movsx rax, byte ptr [rax]")
-        elif ty.size == 2:
-            print("  movsx rax, word ptr [rax]")
-        elif ty.size == 4:
-            print("  movsxd rax, dword ptr [rax]")
-        else:
-            assert ty.size == 8
-            print("  mov rax, [rax]")
-        print("  push rax")
-
-    def store(self, ty):
-        print("  pop rdi")
-        print("  pop rax")
-
-        if ty.kind == TypeKind.TY_BOOL:
-            print("  cmp rdi, 0")
-            print("  setne dil")
-            print("  movzb rdi, dil")
-
-        if ty.size == 1:
-            print("  mov [rax], dil")
-        elif ty.size == 2:
-            print("  mov [rax], di")
-        elif ty.size == 4:
-            print("  mov [rax], edi")
-        else:
-            assert ty.size == 8
-            print("  mov [rax], rdi")
-        print("  push rdi")
-
-    def load_arg(self, var, idx):
-        sz = var.ty.size
-        if sz == 1:
-            print("  mov [rbp-%d], %s" % (var.offset, argreg1[idx]))
-        elif sz == 2:
-            print("  mov [rbp-%d], %s" % (var.offset, argreg2[idx]))
-        elif sz == 4:
-            print("  mov [rbp-%d], %s" % (var.offset, argreg4[idx]))
-        else:
-            assert sz == 8
-            print("  mov [rbp-%d], %s" % (var.offset, argreg8[idx]))
-
-    def emit_data(self, prog):
-        print(".data")
-        vl = prog.globals
-        while vl:
-            var = vl.var
-            print("%s:" % var.name)
-            if not var.contents:
-                print("  .zero %d" % var.ty.size)
-                vl = vl.next
-                continue
-            for c in var.contents:
-                print("  .byte %d" % ord(c))
-            vl = vl.next
 
     def align_to(self, n, align):
         return (n + align - 1) & ~(align - 1)
@@ -1710,34 +1619,32 @@ class Parser:
 
         return self.unary()
 
-    def truncate(self, ty):
-        print("  pop rax")
+    def parse(self):
+        nodes = self.program()
+        if self.current_token.type != TokenType.EOF:
+            self.error(
+                error_code=ErrorCode.UNEXPECTED_TOKEN,
+                token=self.current_token,
+            )
 
-        if ty.kind == TypeKind.TY_BOOL:
-            print("  cmp rax, 0")
-            print("  setne al")
+        return nodes
 
-        if ty.size == 1:
-            print("  movsx rax, al")
-        elif ty.size == 2:
-            print("  movsx rax, ax")
-        elif ty.size == 4:
-            print("  movsxd rax, eax")
+class CodeGen:
+    def __init__(self, prog):
+        self.prog = prog
+        self.funcname = None
+        self.labelseq = 1
+        self.argreg1 = ["dil", "sil", "dl", "cl", "r8b", "r9b"]
+        self.argreg2 = ["di", "si", "dx", "cx", "r8w", "r9w"]
+        self.argreg4 = ["edi", "esi", "edx", "ecx", "r8d", "r9d"]
+        self.argreg8 = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 
-        print("  push rax")
+    def codegen(self):
+        print(".intel_syntax noprefix")
+        self.emit_data(self.prog)
+        self.emit_text(self.prog)
 
-    def inc(self, ty):
-        print("  pop rax")
-        print("  add rax, %d" % (ty.base.size if ty.base else 1))
-        print("  push rax")
-
-    def dec(self, ty):
-        print(" pop rax")
-        print("  sub rax, %d" % (ty.base.size if ty.base else 1))
-        print("  push rax")
-
-
-    def code_gen(self, node):
+    def gen(self, node):
         if node.kind == NodeKind.ND_NULL:
             return
         if node.kind == NodeKind.ND_NUM:
@@ -1748,7 +1655,7 @@ class Parser:
                 print("  push rax")
             return
         if node.kind == NodeKind.ND_EXPR_STMT:
-            self.code_gen(node.lhs)
+            self.gen(node.lhs)
             print("  add rsp, 8")
             return
         if node.kind == NodeKind.ND_VAR or node.kind == NodeKind.ND_MEMBER:
@@ -1758,7 +1665,7 @@ class Parser:
             return
         if node.kind == NodeKind.ND_ASSIGN:
             self.gen_lval(node.lhs)
-            self.code_gen(node.rhs)
+            self.gen(node.rhs)
             self.store(node.ty)
             return
         if node.kind == NodeKind.ND_PRE_INC:
@@ -1800,20 +1707,20 @@ class Parser:
             self.gen_lval(node.lhs)
             print("  push [rsp]")
             self.load(node.lhs.ty)
-            self.code_gen(node.rhs)
+            self.gen(node.rhs)
             self.gen_binary(node)
             self.store(node.ty)
             return
 
         if node.kind == NodeKind.ND_COMMA:
-            self.code_gen(node.lhs)
-            self.code_gen(node.rhs)
+            self.gen(node.lhs)
+            self.gen(node.rhs)
             return
         if node.kind == NodeKind.ND_ADDR:
             self.gen_addr(node.lhs)
             return
         if node.kind == NodeKind.ND_DEREF:
-            self.code_gen(node.lhs)
+            self.gen(node.lhs)
             if node.ty.kind != TypeKind.TY_ARRAY:
                 self.load(node.ty)
             return
@@ -1821,32 +1728,32 @@ class Parser:
             seq = self.labelseq
             self.labelseq += 1
             if node.els:
-                self.code_gen(node.cond)
+                self.gen(node.cond)
                 print("  pop rax")
                 print("  cmp rax, 0")
                 print("  je  .L.else.%d" % seq)
-                self.code_gen(node.then)
+                self.gen(node.then)
                 print("  jmp .L.end.%d" % seq)
                 print(".L.else.%d:" % seq)
-                self.code_gen(node.els)
+                self.gen(node.els)
                 print(".L.end.%d:" % seq)
             else:
-                self.code_gen(node.cond)
+                self.gen(node.cond)
                 print("  pop rax")
                 print("  cmp rax, 0")
                 print("  je  .L.end.%d" % seq)
-                self.code_gen(node.then)
+                self.gen(node.then)
                 print(".L.end.%d:" % seq)
             return
         if node.kind == NodeKind.ND_WHILE:
             seq = self.labelseq
             self.labelseq += 1
             print(".L.begin.%d:" % seq)
-            self.code_gen(node.cond)
+            self.gen(node.cond)
             print("  pop rax")
             print("  cmp rax, 0")
             print("  je  .L.end.%d" % seq)
-            self.code_gen(node.then)
+            self.gen(node.then)
             print("  jmp .L.begin.%d" % seq)
             print(".L.end.%d:" % seq)
             return
@@ -1854,34 +1761,34 @@ class Parser:
             seq = self.labelseq
             self.labelseq += 1
             if node.init:
-                self.code_gen(node.init)
+                self.gen(node.init)
             print(".L.begin.%d:" % seq)
             if node.cond:
-                self.code_gen(node.cond)
+                self.gen(node.cond)
                 print("  pop rax")
                 print("  cmp rax, 0")
                 print("  je  .L.end.%d" % seq)
-            self.code_gen(node.then)
+            self.gen(node.then)
             if node.inc:
-                self.code_gen(node.inc)
+                self.gen(node.inc)
             print("  jmp .L.begin.%d" % seq)
             print(".L.end.%d:" % seq)
             return
         if node.kind == NodeKind.ND_BLOCK or node.kind == NodeKind.ND_STMT_EXPR:
             n = node.body
             while n:
-                self.code_gen(n)
+                self.gen(n)
                 n = n.next
             return
         if node.kind == NodeKind.ND_FUNCALL:
             nargs = 0
             arg = node.args
             while arg:
-                self.code_gen(arg)
+                self.gen(arg)
                 nargs = nargs + 1
                 arg = arg.next
             for i in range(nargs-1, -1, -1):
-                print("  pop %s" % argreg8[i])
+                print("  pop %s" % self.argreg8[i])
             # 函数调用前，必须将 RSP 对齐到 16 字节的边界
             # 这是 ABI 的要求
             seq = self.labelseq
@@ -1901,17 +1808,17 @@ class Parser:
             print("  push rax")
             return
         if node.kind == NodeKind.ND_RETURN:
-            self.code_gen(node.lhs)
+            self.gen(node.lhs)
             print("  pop rax")
             print("  jmp .L.return.%s" % self.funcname)
             return
         if node.kind == NodeKind.ND_CAST:
-            self.code_gen(node.lhs)
+            self.gen(node.lhs)
             self.truncate(node.ty)
             return
 
-        self.code_gen(node.lhs)
-        self.code_gen(node.rhs)
+        self.gen(node.lhs)
+        self.gen(node.rhs)
 
         self.gen_binary(node)
 
@@ -1958,17 +1865,145 @@ class Parser:
 
         print("  push rax")
 
-    def parse(self):
-        nodes = self.program()
-        if self.current_token.type != TokenType.EOF:
-            self.error(
-                error_code=ErrorCode.UNEXPECTED_TOKEN,
-                token=self.current_token,
-            )
+    def truncate(self, ty):
+        print("  pop rax")
 
-        return nodes
+        if ty.kind == TypeKind.TY_BOOL:
+            print("  cmp rax, 0")
+            print("  setne al")
 
+        if ty.size == 1:
+            print("  movsx rax, al")
+        elif ty.size == 2:
+            print("  movsx rax, ax")
+        elif ty.size == 4:
+            print("  movsxd rax, eax")
 
+        print("  push rax")
+
+    def inc(self, ty):
+        print("  pop rax")
+        print("  add rax, %d" % (ty.base.size if ty.base else 1))
+        print("  push rax")
+
+    def dec(self, ty):
+        print(" pop rax")
+        print("  sub rax, %d" % (ty.base.size if ty.base else 1))
+        print("  push rax")
+
+    def gen_addr(self, node):
+        if node.kind == NodeKind.ND_VAR:
+            if node.var.is_local:
+                print("  lea rax, [rbp-%d]" % node.var.offset)
+                print("  push rax")
+            else:
+                print("  push offset %s" % node.var.name)
+            return
+        if node.kind == NodeKind.ND_DEREF:
+            self.gen(node.lhs)
+            return
+        if node.kind == NodeKind.ND_MEMBER:
+            self.gen_addr(node.lhs)
+            print("  pop rax")
+            print("  add rax, %d" % node.member.offset)
+            print("  push rax")
+            return
+        
+        raise Exception("未曾预料到的token！")
+
+    def gen_lval(self, node):
+        if node.ty.kind == TypeKind.TY_ARRAY:
+            raise Exception(node.token + '不是左值')
+        self.gen_addr(node)
+
+    def load(self, ty):
+        print("  pop rax")
+        if ty.size == 1:
+            print("  movsx rax, byte ptr [rax]")
+        elif ty.size == 2:
+            print("  movsx rax, word ptr [rax]")
+        elif ty.size == 4:
+            print("  movsxd rax, dword ptr [rax]")
+        else:
+            assert ty.size == 8
+            print("  mov rax, [rax]")
+        print("  push rax")
+
+    def store(self, ty):
+        print("  pop rdi")
+        print("  pop rax")
+
+        if ty.kind == TypeKind.TY_BOOL:
+            print("  cmp rdi, 0")
+            print("  setne dil")
+            print("  movzb rdi, dil")
+
+        if ty.size == 1:
+            print("  mov [rax], dil")
+        elif ty.size == 2:
+            print("  mov [rax], di")
+        elif ty.size == 4:
+            print("  mov [rax], edi")
+        else:
+            assert ty.size == 8
+            print("  mov [rax], rdi")
+        print("  push rdi")
+
+    def load_arg(self, var, idx):
+        sz = var.ty.size
+        if sz == 1:
+            print("  mov [rbp-%d], %s" % (var.offset, self.argreg1[idx]))
+        elif sz == 2:
+            print("  mov [rbp-%d], %s" % (var.offset, self.argreg2[idx]))
+        elif sz == 4:
+            print("  mov [rbp-%d], %s" % (var.offset, self.argreg4[idx]))
+        else:
+            assert sz == 8
+            print("  mov [rbp-%d], %s" % (var.offset, self.argreg8[idx]))
+
+    def emit_data(self, prog):
+        print(".data")
+        vl = prog.globals
+        while vl:
+            var = vl.var
+            print("%s:" % var.name)
+            if not var.contents:
+                print("  .zero %d" % var.ty.size)
+                vl = vl.next
+                continue
+            for c in var.contents:
+                print("  .byte %d" % ord(c))
+            vl = vl.next
+
+    def emit_text(self, prog):
+        print(".text")
+        fn = prog.fns
+        while fn:
+            if not fn.is_static:
+                print(".global %s" % fn.name)
+            print("%s:" % fn.name)
+            self.funcname = fn.name
+
+            print("  push rbp")
+            print("  mov rbp, rsp")
+            print("  sub rsp, %d" % fn.stack_size)
+
+            i = 0
+            vl = fn.params
+            while vl:
+                self.load_arg(vl.var, i)
+                i = i + 1
+                vl = vl.next
+
+            node = fn.node
+            while node:
+                self.gen(node)
+                node = node.next
+            print(".L.return.%s:" % self.funcname)
+            print("  mov rsp, rbp")
+            print("  pop rbp")
+            print("  ret")
+            fn = fn.next
 def main():
     parser = argparse.ArgumentParser(
         description='tutucc - simple c compiler'
@@ -1979,9 +2014,9 @@ def main():
     text = open(args.inputfile, 'r').read()
     # text = args.inputfile
 
-    tokens = Lexer(text).lexer()
+    tokens = Lexer(text).lexer() # 词法分析
     try:
-        parser = Parser(tokens)
+        parser = Parser(tokens) # 语法分析
         prog = parser.parse()
         fn = prog.fns
         while fn:
@@ -1996,36 +2031,9 @@ def main():
                 vl = vl.next
             fn.stack_size = parser.align_to(offset, 8)
             fn = fn.next
-        print(".intel_syntax noprefix")
-        parser.emit_data(prog)
-        print(".text")
-        fn = prog.fns
-        while fn:
-            if not fn.is_static:
-                print(".global %s" % fn.name)
-            print("%s:" % fn.name)
-            parser.funcname = fn.name
+        codegen = CodeGen(prog) # 代码生成
+        codegen.codegen()
 
-            print("  push rbp")
-            print("  mov rbp, rsp")
-            print("  sub rsp, %d" % fn.stack_size)
-
-            i = 0
-            vl = fn.params
-            while vl:
-                parser.load_arg(vl.var, i)
-                i = i + 1
-                vl = vl.next
-
-            node = fn.node
-            while node:
-                parser.code_gen(node)
-                node = node.next
-            print(".L.return.%s:" % parser.funcname)
-            print("  mov rsp, rbp")
-            print("  pop rbp")
-            print("  ret")
-            fn = fn.next
         sys.exit(0)
     except (LexerError, ParserError) as e:
         print(e.message)
