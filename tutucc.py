@@ -1887,7 +1887,7 @@ class CodeGen:
         print("  push rax")
 
     def dec(self, ty):
-        print(" pop rax")
+        print("  pop rax")
         print("  sub rax, %d" % (ty.base.size if ty.base else 1))
         print("  push rax")
 

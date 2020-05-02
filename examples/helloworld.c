@@ -1,3 +1,7 @@
+int inc(int x) {
+    return x + 1;    
+}
+
 int main() {
-    printf("hello world\n");    
+    printf("%d\n", inc(1));    
 }
