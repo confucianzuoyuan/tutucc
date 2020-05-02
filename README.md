@@ -4,6 +4,12 @@
 
 `tutucc.py`是使用`Python`实现的C语言编译器。
 
+```sh
+$ python3 tutucc.py source.c > tmp.s
+$ gcc -static -o tmp tmp.s
+$ ./tmp
+```
+
 **EBNF**
 
 ```
