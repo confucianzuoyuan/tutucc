@@ -53,6 +53,7 @@ class TokenType(Enum):
     DIVEQ         = '/='
     ADDEQ         = '+='
     SUBEQ         = '-='
+    NOT           = '!'
     # block of reserved words
     INT           = 'INT'
     CHAR          = 'CHAR'
@@ -434,8 +435,7 @@ class NodeKind(Enum):
     ND_PTR_SUB_EQ= auto() # -=
     ND_MUL_EQ    = auto() # *=
     ND_DIV_EQ    = auto() # /=
-
-
+    ND_NOT       = auto()
 
 class TypeKind(Enum):
     TY_CHAR    = auto()
@@ -1236,6 +1236,8 @@ class Parser:
             return self.new_unary(NodeKind.ND_PRE_INC, self.unary(), token)
         if self.consume(TokenType.TWOSUB):
             return self.new_unary(NodeKind.ND_PRE_DEC, self.unary(), token)
+        if self.consume(TokenType.NOT):
+            return self.new_unary(NodeKind.ND_NOT, self.cast(), token)
         return self.postfix()
 
     def func_args(self):
@@ -1328,7 +1330,8 @@ class Parser:
            node.kind == NodeKind.ND_NE or      \
            node.kind == NodeKind.ND_LT or      \
            node.kind == NodeKind.ND_LE or      \
-           node.kind == NodeKind.ND_NUM:
+           node.kind == NodeKind.ND_NUM or     \
+           node.kind == NodeKind.ND_NOT:
             node.ty = LongType
             return
 
@@ -1733,6 +1736,14 @@ class CodeGen:
             self.gen(node.lhs)
             if node.ty.kind != TypeKind.TY_ARRAY:
                 self.load(node.ty)
+            return
+        if node.kind == NodeKind.ND_NOT:
+            self.gen(node.lhs)
+            print("  pop rax")
+            print("  cmp rax, 0")
+            print("  sete al")
+            print("  movzb rax, al")
+            print("  push rax")
             return
         if node.kind == NodeKind.ND_IF:
             seq = self.labelseq
