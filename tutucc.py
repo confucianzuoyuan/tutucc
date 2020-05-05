@@ -2,7 +2,6 @@ import argparse
 import sys
 from enum import Enum, auto
 
-
 class ErrorCode(Enum):
     UNEXPECTED_TOKEN = 'Unexpected token'
     ID_NOT_FOUND     = 'Identifier not found'
@@ -187,25 +186,36 @@ class Lexer:
         """Return a (multidigit) integer or float consumed from the input."""
 
         # Create a new token with current line and column number
-        token = Token(type=None, value=None, lineno=self.lineno, column=self.column)
+        token = Token(type=TokenType.INTEGER_CONST, value=None, lineno=self.lineno, column=self.column)
 
         result = ''
-        while self.current_char and self.current_char.isdigit():
+        if self.current_char == '0':
             result += self.current_char
             self.advance()
-
-        if self.current_char == '.':
-            result += self.current_char
-            self.advance()
-
+            if self.current_char in 'Bb':
+                result += self.current_char
+                self.advance()
+                while self.current_char and self.current_char.isdigit():
+                    result += self.current_char
+                    self.advance()
+                token.value = int(result, 2)
+            elif self.current_char in 'Xx':
+                result += self.current_char
+                self.advance()
+                while self.current_char and (self.current_char.isdigit() or ('a' <= self.current_char <= 'f') or ('A' <= self.current_char <= 'F')):
+                    result += self.current_char
+                    self.advance()
+                token.value = int(result, 16)
+            else:
+                while self.current_char and self.current_char.isdigit():
+                    result += self.current_char
+                    self.advance()
+                token.value = int(result, 8)
+        else:
             while self.current_char and self.current_char.isdigit():
                 result += self.current_char
                 self.advance()
 
-            token.type = TokenType.REAL_CONST
-            token.value = float(result)
-        else:
-            token.type = TokenType.INTEGER_CONST
             token.value = int(result)
 
         return token
