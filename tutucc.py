@@ -80,6 +80,8 @@ class TokenType(Enum):
     ASSIGN        = '='
     EOF           = 'EOF'
     ADDR          = '&'
+    BITOR         = '|'
+    BITXOR        = '^'
     STR           = 'STR'
     TWOADD        = '++'
     TWOSUB        = '--'
@@ -438,6 +440,9 @@ class NodeKind(Enum):
     ND_DIV_EQ    = auto() # /=
     ND_NOT       = auto() # !
     ND_BITNOT    = auto() # ~
+    ND_BITAND    = auto() # &
+    ND_BITOR     = auto() # |
+    ND_BITXOR    = auto() # ^
 
 class TypeKind(Enum):
     TY_CHAR    = auto()
@@ -971,7 +976,7 @@ class Parser:
         return node
 
     def assign(self):
-        node = self.equality()
+        node = self.bitor()
 
         token = self.current_token
         if self.consume(TokenType.ASSIGN):
@@ -992,6 +997,29 @@ class Parser:
                 return self.new_binary(NodeKind.ND_PTR_SUB_EQ, node, self.assign(), token)
             else:
                 return self.new_binary(NodeKind.ND_SUB_EQ, node, self.assign(), token)
+        return node
+
+    def bitor(self):
+        node = self.bitxor()
+        token = self.current_token
+        while self.consume(TokenType.BITOR):
+            node = self.new_binary(NodeKind.ND_BITOR, node, self.bitxor(), token)
+        return node
+
+    def bitxor(self):
+        node = self.bitand()
+        token = self.current_token
+        while self.consume(TokenType.BITXOR):
+            node = self.new_binary(NodeKind.ND_BITXOR, node, self.bitand(), token)
+
+        return node
+
+    def bitand(self):
+        node = self.equality()
+        token = self.current_token
+        while self.consume(TokenType.ADDR):
+            node = self.new_binary(NodeKind.ND_BITAND, node, self.equality(), token)
+
         return node
 
     def equality(self):
@@ -1335,7 +1363,10 @@ class Parser:
            node.kind == NodeKind.ND_LT or      \
            node.kind == NodeKind.ND_LE or      \
            node.kind == NodeKind.ND_NUM or     \
-           node.kind == NodeKind.ND_NOT:
+           node.kind == NodeKind.ND_NOT or    \
+           node.kind == NodeKind.ND_BITAND or \
+           node.kind == NodeKind.ND_BITOR or \
+           node.kind == NodeKind.ND_BITXOR:
             node.ty = LongType
             return
 
@@ -1894,6 +1925,12 @@ class CodeGen:
             print("  cmp rax, rdi")
             print("  setle al")
             print("  movzb rax, al")
+        if node.kind == NodeKind.ND_BITAND:
+            print("  and rax, rdi")
+        if node.kind == NodeKind.ND_BITOR:
+            print("  or rax, rdi")
+        if node.kind == NodeKind.ND_BITXOR:
+            print("  xor rax, rdi")
 
         print("  push rax")
 
